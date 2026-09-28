@@ -159,14 +159,6 @@ Create, switch, or remove spaces.
 
 ---
 
-### `install_plugin`
-
-Install a plugin from the marketplace.
-
-**Required scope:** `write`
-
----
-
 ### `cloud_sync`
 
 Trigger a cloud synchronization.

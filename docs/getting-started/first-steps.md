@@ -15,7 +15,6 @@ pm setup
 - choosing or changing the active crypto profile
 - selecting the cipher for new vaults
 - creating spaces
-- loading plugins
 - configuring cloud sync
 
 The default vault path is `vault.dat` beside the binary unless `APM_VAULT_PATH` is set.
@@ -97,7 +96,7 @@ Useful early commands:
 - `pm totp [entry_name]` for one-off TOTP retrieval
 - `pm gen` for password generation
 - `pm cinfo` for vault crypto parameters
-- `pm loaded` to inspect loaded plugins, policies, and `.apmignore`
+- `pm loaded` to inspect loaded policies and `.apmignore`
 
 ## 6. Lock when done
 

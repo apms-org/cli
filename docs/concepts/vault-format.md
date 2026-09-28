@@ -135,7 +135,6 @@ The decrypted JSON payload contains the full `Vault` struct:
   "spaces": ["default", "Work", "Personal"],
   "cloud_config": {...},
   "mcp_tokens": [...],
-  "plugin_permission_overrides": {...},
   "secret_telemetry": {...},
   "history": [...],
   "current_profile_params": {...}

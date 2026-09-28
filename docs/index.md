@@ -5,7 +5,7 @@ APM is a Go-based password manager with two binaries:
 - `pm` for personal vaults
 - `pm-team` for shared organizational vaults
 
-The source tree implements more than a basic password CLI. It includes sessions, recovery, cloud sync, plugins, MCP access, Windows autofill, shell injection alongside the core encrypted vault.
+The source tree implements more than a basic password CLI. It includes sessions, recovery, cloud sync, MCP access, Windows autofill, shell injection alongside the core encrypted vault.
 
 ## What APM currently does
 
@@ -14,7 +14,6 @@ The source tree implements more than a basic password CLI. It includes sessions,
 - Supports delegated ephemeral sessions for automation and AI-agent access.
 - Syncs encrypted vault blobs to Google Drive, GitHub, and Dropbox.
 - Exposes a built-in MCP server with scoped tokens and mutation previews.
-- Runs a manifest-based plugin system with hooks and runtime-added commands.
 - Offers Windows autofill and autocomplete support plus shell-side secret injection.
 - Provides a separate team edition with departments, approvals, roles, and shared entries.
 
@@ -53,7 +52,6 @@ go build -o pm-team .
 - [Injecting secrets into your shell](guides/inject.md)
 - [Generating TOTP codes](guides/totp.md)
 - [Managing sessions](guides/sessions.md)
-- [Using plugins](guides/plugins.md)
 - [MCP integration](guides/mcp-integration.md)
 - [Team edition](guides/team-edition.md)
 - [Import and export](guides/import-export.md)
@@ -69,7 +67,6 @@ go build -o pm-team .
 - [Policy engine](concepts/policy-engine.md)
 - [Sessions](concepts/sessions.md)
 - [Cloud sync](concepts/cloud-sync.md)
-- [Plugins](concepts/plugins.md)
 - [MCP](concepts/mcp.md)
 - [Recovery](concepts/recovery.md)
 
@@ -78,7 +75,6 @@ go build -o pm-team .
 - [CLI reference](reference/cli.md)
 - [Storage](reference/storage.md)
 - [Environment variables](reference/environment-variables.md)
-- [Plugin API](reference/plugin-api.md)
 - [MCP tools](reference/mcp-tools.md)
 - [Policies](reference/policies.md)
 - [`.apmignore`](reference/apmignore.md)
@@ -94,4 +90,3 @@ go build -o pm-team .
 - The current personal vault format is `APMVAULT` v4.
 - Built-in profiles are `standard`, `hardened`, `paranoid`, and `legacy`.
 - Personal `pm add` supports 25 entry types; team `pm-team add` currently supports 22 shared entry types.
-- Plugin commands can extend the `pm` command surface at runtime.

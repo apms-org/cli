@@ -16,7 +16,7 @@ Welcome to APM. This section covers everything you need to go from zero to a ful
 
 -   **[Features](features.md)**
 
-    A bird's-eye view of every APM capability — from secret types and cloud sync to plugins and AI integration.
+    A bird's-eye view of every APM capability, from secret types and cloud sync to AI integration.
 
 -   **[Getting Help](help.md)**
 

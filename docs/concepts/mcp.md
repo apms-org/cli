@@ -43,12 +43,12 @@ The MCP server uses **stdio transport** — it reads JSON-RPC messages from stdi
 
 Each token has one or more permission scopes that control tool access:
 
-| Scope     | Tools Available                                                                                         |
-| :-------- | :------------------------------------------------------------------------------------------------------ |
-| `read`    | `list_entries`, `search_entries`, `get_entry` (metadata only)                                           |
-| `secrets` | All `read` tools + `decrypt_entry` (password values), `get_totp`                                        |
-| `write`   | All `read` + `add_entry`, `edit_entry`, `delete_entry`, `manage_spaces`, `install_plugin`, `cloud_sync` |
-| `admin`   | All scopes + `manage_profiles`, `cloud_config`, `get_history`, `get_audit_logs`                         |
+| Scope     | Tools Available                                                                       |
+| :-------- | :------------------------------------------------------------------------------------ |
+| `read`    | `list_entries`, `search_entries`, `get_entry` (metadata only)                         |
+| `secrets` | All `read` tools + `decrypt_entry` (password values), `get_totp`                      |
+| `write`   | All `read` + `add_entry`, `edit_entry`, `delete_entry`, `manage_spaces`, `cloud_sync` |
+| `admin`   | All scopes + `manage_profiles`, `cloud_config`, `get_history`, `get_audit_logs`       |
 
 Scopes are **cumulative** — `admin` includes everything from `write`, which includes everything from `read`.
 

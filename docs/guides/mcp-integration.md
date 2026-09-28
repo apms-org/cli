@@ -64,7 +64,6 @@ The MCP implementation covers more than simple vault reads. The current server c
 - entry mutation
 - spaces
 - profiles
-- plugin install flows
 - cloud sync and cloud config
 - audit or history access
 

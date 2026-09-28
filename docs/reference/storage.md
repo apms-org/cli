@@ -11,7 +11,7 @@ File locations and data layout for all APM artifacts.
 | Default vault | `./vault.dat` (current working directory) |
 | Override      | `APM_VAULT_PATH` environment variable     |
 
-The vault is a single binary file in [V4 format](../concepts/vault-format.md) containing all encrypted entries, configuration, cloud tokens, MCP tokens, plugin overrides, and telemetry.
+The vault is a single binary file in [V4 format](../concepts/vault-format.md) containing all encrypted entries, configuration, cloud tokens, MCP tokens, and telemetry.
 
 ---
 
@@ -59,15 +59,6 @@ Append-only log of vault interactions with timestamps, actions, users, and hostn
 | `$TEMP/.apm_autofill_state.json` | Daemon PID, port, and token |
 
 Created when the autofill daemon starts. Contains the PID, loopback address, bearer token, and start time.
-
----
-
-## Plugin Directory
-
-| Location                                   | Purpose                      |
-| :----------------------------------------- | :--------------------------- |
-| `~/.config/apm/plugins/`                   | Installed plugin directories |
-| `~/.config/apm/plugins/<name>/plugin.json` | Plugin manifest              |
 
 ---
 

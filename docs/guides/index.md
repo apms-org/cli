@@ -17,13 +17,11 @@ These guides focus on workflows that are actually present in the current binarie
 - [MCP integration](mcp-integration.md)
 - [Autofill on Windows](../autofill_windows.md)
 
-## Extension and organization
+## Organization
 
-- [Using plugins](plugins.md)
 - [Team edition](team-edition.md)
 
 ## Notes on scope
 
 - `pm` is the personal CLI.
 - `pm-team` is a separate binary documented under [Team](../team/index.md).
-- Plugin manifests can add new runtime commands, so the exact command list may be larger than the built-in docs surface.

@@ -93,14 +93,17 @@ func TestCLISmoke_LoadedSections(t *testing.T) {
 	vaultPath := filepath.Join(tempDir, "vault.dat")
 	loadedOut := runCommand(t, exec.Command(pmBinary, "--vault", vaultPath, "loaded"))
 
-	for _, section := range []string{"[plugins]", "[policies]", "[.apmignore]"} {
+	for _, section := range []string{"[policies]", "[.apmignore]"} {
 		if !strings.Contains(loadedOut, section) {
 			t.Fatalf("expected %s in loaded output, got:\n%s", section, loadedOut)
 		}
 	}
+	if strings.Contains(loadedOut, "[plugins]") {
+		t.Fatalf("expected no [plugins] section in loaded output, got:\n%s", loadedOut)
+	}
 }
 
-func TestCLISmoke_PluginCommandRegistration(t *testing.T) {
+func TestCLISmoke_PluginsRemoved(t *testing.T) {
 	tempDir := t.TempDir()
 
 	exe := "pm"
@@ -110,40 +113,20 @@ func TestCLISmoke_PluginCommandRegistration(t *testing.T) {
 	pmBinary := filepath.Join(tempDir, exe)
 	buildPMBinary(t, pmBinary)
 
-	pluginManifest := `{
-  "schema_version": "1.0",
-  "name": "hello_vault",
-  "version": "1.0.0",
-  "description": "test plugin",
-  "author": "test",
-  "permissions": [],
-  "file_storage": {"enabled": false, "allowed_types": []},
-  "commands": {
-    "hello": {
-      "description": "prints hello",
-      "flags": {},
-      "steps": [
-        {"op":"s:out","args":["hello-from-plugin"]}
-      ]
-    }
-  },
-  "hooks": {}
-}`
-	writeFile(t, filepath.Join(tempDir, "plugins", "hello_vault", "plugin.json"), pluginManifest)
+	writeFile(t, filepath.Join(tempDir, "plugins", "hello_vault", "plugin.json"), `{"name":"hello_vault","commands":{"hello":{"steps":[{"op":"s:out","args":["hello-from-plugin"]}]}}}`)
 
 	vaultPath := filepath.Join(tempDir, "vault.dat")
-	setupCmd := exec.Command(pmBinary, "--vault", vaultPath, "setup", "--non-interactive")
-	setupCmd.Stdin = strings.NewReader("ValidPass123!\n")
-	setupOut := runCommand(t, setupCmd)
-	if !strings.Contains(setupOut, "Setup completed successfully.") {
-		t.Fatalf("expected setup success output, got:\n%s", setupOut)
+	for _, args := range [][]string{{"plugins"}, {"hello"}} {
+		out, _ := exec.Command(pmBinary, append([]string{"--vault", vaultPath}, args...)...).CombinedOutput()
+		if !strings.Contains(string(out), `unknown command "`+args[0]+`"`) {
+			t.Fatalf("expected unknown command error for pm %s, got:\n%s", args[0], string(out))
+		}
 	}
 
-	runHello := exec.Command(pmBinary, "--vault", vaultPath, "hello")
-	runHello.Stdin = strings.NewReader("ValidPass123!\n")
-	helloOut := runCommand(t, runHello)
-	if !strings.Contains(helloOut, "hello-from-plugin") {
-		t.Fatalf("expected plugin command output, got:\n%s", helloOut)
+	helpOut := runCommand(t, exec.Command(pmBinary, "--vault", vaultPath, "--help"))
+	commandList, _, _ := strings.Cut(helpOut, "Flags:")
+	if strings.Contains(strings.ToLower(commandList), "plugin") {
+		t.Fatalf("expected no plugin commands in help, got:\n%s", helpOut)
 	}
 }
 

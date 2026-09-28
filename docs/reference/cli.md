@@ -79,22 +79,6 @@ Notes:
 - GitHub uses token-based auth and a repository target.
 - `cloud get` can work with provider identifiers such as repo, file ID, or Dropbox path.
 
-### Plugins
-
-- `pm plugins installed`
-- `pm plugins list`
-- `pm plugins market`
-- `pm plugins add [name]`
-- `pm plugins install [name]`
-- `pm plugins push [name]`
-- `pm plugins remove [name]`
-- `pm plugins search`
-- `pm plugins local [path]`
-- `pm plugins access [plugin] [permission] [on|off]`
-- `pm plugins run [plugin] [command] [args...]`
-
-Plugins may also register extra root-level commands.
-
 ### MCP
 
 - `pm mcp config`
@@ -117,7 +101,6 @@ Plugins may also register extra root-level commands.
 Depending on build and runtime state, `pm` also exposes:
 
 - `pm inject ...`
-- plugin-defined root commands
 
 ## Team binary: `pm-team`
 

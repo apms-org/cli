@@ -42,12 +42,8 @@ This page lists the capabilities that are implemented in the current codebase.
 - Provider diff and selective merge flow
 - Provider-specific `.apmignore` filtering before upload
 
-## Extensibility
+## AI access
 
-- Manifest-based plugins
-- Hook execution around vault actions
-- Plugin marketplace commands
-- Runtime-added plugin commands
 - Built-in MCP server with permission-scoped tokens
 
 ## Team edition

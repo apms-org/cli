@@ -1,6 +1,6 @@
 # Architecture
 
-APM is structured as a **four-layer architecture** that separates concerns between user interaction, domain logic, external integrations, and extensibility.
+APM is structured as a **three-layer architecture** that separates concerns between user interaction, domain logic, and external integrations.
 
 ---
 
@@ -33,18 +33,9 @@ graph TB
         R[autofill/ — Windows Daemon]
     end
 
-    subgraph Extension["Layer 4: Extension"]
-        S[plugins/engine.go — Step Executor]
-        T[plugins/manifest.go — Manifest & Permissions]
-        U[plugins/definitions.go — Command Definitions]
-        V[cloud_plugins.go — Marketplace]
-    end
-
     CLI --> Domain
     CLI --> Integration
-    CLI --> Extension
     Integration --> Domain
-    Extension --> Domain
 ```
 
 ---
@@ -134,17 +125,6 @@ The autofill daemon is a local HTTP server that:
 
 ---
 
-## Layer 4: Extension
-
-| Component   | File(s)                  | Purpose                           |
-| :---------- | :----------------------- | :-------------------------------- |
-| Engine      | `plugins/engine.go`      | Executes plugin step pipelines    |
-| Manifest    | `plugins/manifest.go`    | Validates plugin.json schemas     |
-| Definitions | `plugins/definitions.go` | Built-in step command definitions |
-| Marketplace | `cloud_plugins.go`       | Cloud-backed plugin distribution  |
-
----
-
 ## Data Flow: Vault Unlock → Save
 
 ```mermaid
@@ -182,13 +162,12 @@ sequenceDiagram
 
 ## Security Boundaries
 
-| Boundary         | Inside                          | Outside                  |
-| :--------------- | :------------------------------ | :----------------------- |
-| Vault encryption | All entry data, credentials     | Master password, keys    |
-| Session boundary | Decrypted vault (in memory)     | Persisted data (on disk) |
-| Cloud boundary   | Encrypted blob (APMVAULT)       | Plaintext entries        |
-| MCP boundary     | Permitted data (per scope)      | Unauthorized data        |
-| Plugin boundary  | Permitted operations (per perm) | Unauthorized operations  |
+| Boundary         | Inside                      | Outside                  |
+| :--------------- | :-------------------------- | :----------------------- |
+| Vault encryption | All entry data, credentials | Master password, keys    |
+| Session boundary | Decrypted vault (in memory) | Persisted data (on disk) |
+| Cloud boundary   | Encrypted blob (APMVAULT)   | Plaintext entries        |
+| MCP boundary     | Permitted data (per scope)  | Unauthorized data        |
 
 ---
 

@@ -72,14 +72,6 @@ Provider comparison, OAuth2 vs PAT, retrieval key mechanics, metadata consent, a
 
 <div class="apm-feature-card" markdown>
 
-### [Plugins](plugins.md)
-
-Manifest-based architecture, 100+ permissions, step executor, hook lifecycle, and marketplace.
-
-</div>
-
-<div class="apm-feature-card" markdown>
-
 ### [MCP Server](mcp.md)
 
 Model Context Protocol internals — permission scopes, transaction guardrails, and token lifecycle.

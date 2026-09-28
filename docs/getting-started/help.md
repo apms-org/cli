@@ -18,7 +18,6 @@ pm cloud --help
 pm cloud init --help
 pm mcp --help
 pm auth --help
-pm plugins --help
 ```
 
 This displays usage syntax, available flags, and a brief description of each command.
