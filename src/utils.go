@@ -242,9 +242,16 @@ func ValidateMasterPassword(password string) error {
 	return nil
 }
 
-func GetFailureCount() int {
+func apmStateDir() string {
+	if d := strings.TrimSpace(os.Getenv("APM_STATE_DIR")); d != "" {
+		return d
+	}
 	exe, _ := os.Executable()
-	path := filepath.Join(filepath.Dir(exe), ".apm_lock")
+	return filepath.Dir(exe)
+}
+
+func GetFailureCount() int {
+	path := filepath.Join(apmStateDir(), ".apm_lock")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0
@@ -254,15 +261,13 @@ func GetFailureCount() int {
 }
 
 func TrackFailure() {
-	exe, _ := os.Executable()
-	path := filepath.Join(filepath.Dir(exe), ".apm_lock")
+	path := filepath.Join(apmStateDir(), ".apm_lock")
 	count := GetFailureCount()
 	_ = os.WriteFile(path, []byte(strconv.Itoa(count+1)), 0600)
 }
 
 func ClearFailures() {
-	exe, _ := os.Executable()
-	path := filepath.Join(filepath.Dir(exe), ".apm_lock")
+	path := filepath.Join(apmStateDir(), ".apm_lock")
 	os.Remove(path)
 }
 

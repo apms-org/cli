@@ -86,12 +86,13 @@ func newAEAD(key []byte, profile CryptoProfile) (cipher.AEAD, error) {
 }
 
 type Entry struct {
-	Account  string   `json:"account"`
-	Username string   `json:"username"`
-	Password string   `json:"password"`
-	URLs     []string `json:"urls,omitempty"`
-	Website  string   `json:"website,omitempty"`
-	Space    string   `json:"space,omitempty"`
+	Account  string    `json:"account"`
+	Username string    `json:"username"`
+	Password string    `json:"password"`
+	URLs     []string  `json:"urls,omitempty"`
+	Website  string    `json:"website,omitempty"`
+	Space    string    `json:"space,omitempty"`
+	Passkeys []Passkey `json:"passkeys,omitempty"`
 }
 
 type TOTPEntry struct {
@@ -231,6 +232,7 @@ type LegalContractEntry struct {
 type RecoveryCodeEntry struct {
 	Service string   `json:"service"`
 	Codes   []string `json:"codes"`
+	Used    []string `json:"used,omitempty"`
 	Space   string   `json:"space,omitempty"`
 }
 
@@ -292,6 +294,7 @@ type RecoveryData struct {
 	AlertsEnabled          bool              `json:"alerts_enabled,omitempty"`
 	SecurityLevel          int               `json:"security_level,omitempty"`
 	AlertEmail             string            `json:"alert_email,omitempty"`
+	EmailHint              string            `json:"email_hint,omitempty"`
 }
 
 type AudioEntry struct {
@@ -357,23 +360,22 @@ type Vault struct {
 	Profile                    string                 `json:"profile,omitempty"`
 	AutocompleteWindowDisabled bool                   `json:"autocomplete_window_disabled,omitempty"`
 
-	AlertEmail                string                     `json:"alert_email,omitempty"`
-	AlertsEnabled             bool                       `json:"alerts_enabled,omitempty"`
-	AnomalyDetectionEnabled   bool                       `json:"anomaly_detection_enabled,omitempty"`
-	LastCloudProvider         string                     `json:"last_cloud_provider,omitempty"`
-	DriveSyncMode             string                     `json:"drive_sync_mode,omitempty"` // "apm_public" or "self_hosted"
-	DriveKeyMetadataConsent   bool                       `json:"drive_key_metadata_consent,omitempty"`
-	GitHubToken               string                     `json:"github_token,omitempty"`
-	GitHubRepo                string                     `json:"github_repo,omitempty"`
-	DropboxToken              []byte                     `json:"dropbox_token,omitempty"`
-	DropboxSyncMode           string                     `json:"dropbox_sync_mode,omitempty"`
-	DropboxKeyMetadataConsent bool                       `json:"dropbox_key_metadata_consent,omitempty"`
-	DropboxFileID             string                     `json:"dropbox_file_id,omitempty"`
-	CurrentSpace              string                     `json:"current_space,omitempty"`
-	Spaces                    []string                   `json:"spaces"`
-	ActivePolicy              Policy                     `json:"active_policy,omitempty"`
-	PluginPermissionOverrides map[string]map[string]bool `json:"plugin_permission_overrides,omitempty"`
-	NeedsRepair               bool                       `json:"-"`
+	AlertEmail                string   `json:"alert_email,omitempty"`
+	AlertsEnabled             bool     `json:"alerts_enabled,omitempty"`
+	AnomalyDetectionEnabled   bool     `json:"anomaly_detection_enabled,omitempty"`
+	LastCloudProvider         string   `json:"last_cloud_provider,omitempty"`
+	DriveSyncMode             string   `json:"drive_sync_mode,omitempty"` // "apm_public" or "self_hosted"
+	DriveKeyMetadataConsent   bool     `json:"drive_key_metadata_consent,omitempty"`
+	GitHubToken               string   `json:"github_token,omitempty"`
+	GitHubRepo                string   `json:"github_repo,omitempty"`
+	DropboxToken              []byte   `json:"dropbox_token,omitempty"`
+	DropboxSyncMode           string   `json:"dropbox_sync_mode,omitempty"`
+	DropboxKeyMetadataConsent bool     `json:"dropbox_key_metadata_consent,omitempty"`
+	DropboxFileID             string   `json:"dropbox_file_id,omitempty"`
+	CurrentSpace              string   `json:"current_space,omitempty"`
+	Spaces                    []string `json:"spaces"`
+	ActivePolicy              Policy   `json:"active_policy,omitempty"`
+	NeedsRepair               bool     `json:"-"`
 
 	CurrentProfileParams   *CryptoProfile             `json:"-"`
 	AuthKey                []byte                     `json:"-"` // derived auth key for HMAC signing (never serialized)
@@ -395,6 +397,7 @@ type Vault struct {
 	RecoveryPasskeyEnabled bool                       `json:"recovery_passkey_enabled,omitempty"`
 	RecoveryPasskeyUserID  []byte                     `json:"recovery_passkey_user_id,omitempty"`
 	RecoveryPasskeyCred    []byte                     `json:"recovery_passkey_cred,omitempty"`
+	Desktop                *DesktopState              `json:"desktop,omitempty"`
 }
 
 func (v *Vault) Serialize(masterPassword string) ([]byte, error) {
@@ -473,6 +476,7 @@ func EncryptVault(vault *Vault, masterPassword string) ([]byte, error) {
 	if vault.RecoveryEmail != "" {
 		h := sha256.Sum256([]byte(strings.ToLower(vault.RecoveryEmail)))
 		rec.EmailHash = h[:]
+		rec.EmailHint = MaskEmailHint(vault.RecoveryEmail)
 	}
 
 	if len(vault.RecoverySlot) > 0 {
@@ -688,14 +692,14 @@ func decryptNewVault(data []byte, masterPassword string, costMultiplier int) (*V
 						break
 					}
 					// Try with salt-derived nonce first (new format), fall back to
-				// zero nonce for vaults created before the nonce fix.
-				trialSlot := data[i : i+masterSlotLen]
-				dek, err = slotAEAD.Open(nil, mNonce, trialSlot, nil)
-				if err != nil {
-					// Legacy: vault created with zero master-slot nonce
-					legacyNonce := make([]byte, slotAEAD.NonceSize())
-					dek, err = slotAEAD.Open(nil, legacyNonce, trialSlot, nil)
-				}
+					// zero nonce for vaults created before the nonce fix.
+					trialSlot := data[i : i+masterSlotLen]
+					dek, err = slotAEAD.Open(nil, mNonce, trialSlot, nil)
+					if err != nil {
+						// Legacy: vault created with zero master-slot nonce
+						legacyNonce := make([]byte, slotAEAD.NonceSize())
+						dek, err = slotAEAD.Open(nil, legacyNonce, trialSlot, nil)
+					}
 					if err == nil {
 						offset = i + masterSlotLen
 						found = true

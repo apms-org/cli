@@ -29,7 +29,6 @@ import (
 	injectcmd "github.com/aaravmaloo/apm/cmd"
 	src "github.com/aaravmaloo/apm/src"
 
-	"github.com/aaravmaloo/apm/src/plugins"
 	"github.com/aaravmaloo/apm/src/touchid"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -47,7 +46,6 @@ import (
 
 var vaultPath string
 var inputReader *bufio.Reader
-var pluginMgr *plugins.PluginManager
 
 func init() {
 	exe, err := os.Executable()
@@ -71,13 +69,6 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:   "pm",
 		Short: "A simple password manager CLI",
-	}
-
-	exe, _ := os.Executable()
-	pluginMgr = plugins.NewPluginManager(filepath.Dir(exe))
-
-	if err := pluginMgr.LoadPlugins(); err != nil {
-		color.Red("Error loading plugins: %v\n", err)
 	}
 
 	setupGDrive := func(v *src.Vault, mp string) error {
@@ -222,11 +213,6 @@ func main() {
 			}
 			if readonly {
 				color.Red("Vault is in READ-ONLY mode. Cannot add entries.")
-				return
-			}
-
-			if err := pluginMgr.ExecuteHooks("pre", "add", vault, vaultPath); err != nil {
-				color.Red("Hook executing blocked action: %v", err)
 				return
 			}
 
@@ -2299,591 +2285,16 @@ func main() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
 
-	var pluginsCmd = &cobra.Command{
-		Use:   "plugins",
-		Short: "Manage APM plugins",
-	}
-
-	var pluginsInstalledCmd = &cobra.Command{
-		Use:   "installed",
-		Short: "List installed plugins",
-		Run: func(cmd *cobra.Command, args []string) {
-			list := pluginMgr.ListPlugins()
-			if len(list) == 0 {
-				fmt.Println("No plugins installed locally.")
-				return
-			}
-			fmt.Println("Installed Plugins:")
-			for _, p := range list {
-				fmt.Printf("- %s\n", p)
-			}
-		},
-	}
-
-	var pluginsListCmd = &cobra.Command{
-		Use:   "list",
-		Short: "List installed plugins (alias of installed)",
-		Run: func(cmd *cobra.Command, args []string) {
-			list := pluginMgr.ListPlugins()
-			if len(list) == 0 {
-				fmt.Println("No plugins installed locally.")
-				return
-			}
-			sort.Strings(list)
-			fmt.Println("Installed Plugins:")
-			for _, n := range list {
-				fmt.Printf("- %s\n", n)
-			}
-		},
-	}
-
-	var pluginsMarketCmd = &cobra.Command{
-		Use:     "market",
-		Aliases: []string{"marketplace"},
-		Short:   "List available plugins in Marketplace (Drive)",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Fetching plugins from Marketplace...")
-			cm, err := getCloudManagerEx(context.Background(), nil, "", "gdrive")
-			if err != nil {
-				color.Red("Error connecting to marketplace: %v", err)
-				return
-			}
-			plugins, err := cm.ListMarketplacePlugins()
-			if err != nil {
-				color.Red("Error listing plugins: %v", err)
-				return
-			}
-
-			if len(plugins) == 0 {
-				fmt.Println("No plugins found in Marketplace.")
-				return
-			}
-			fmt.Println("Available Plugins:")
-			sort.Strings(plugins)
-			for _, n := range plugins {
-				fmt.Printf("- %s\n", n)
-			}
-		},
-	}
-
-	var pluginsAddCmd = &cobra.Command{
-		Use:   "add [name]",
-		Short: "Install a plugin from Marketplace",
-		Run: func(cmd *cobra.Command, args []string) {
-			if len(args) < 1 {
-				color.Red("Usage: pm plugins add <name>")
-				return
-			}
-			name := args[0]
-			targetDir := filepath.Join(pluginMgr.PluginsDir, name)
-
-			cm, err := getCloudManagerEx(context.Background(), nil, "", "gdrive")
-			if err != nil {
-				color.Red("Error connecting to marketplace: %v", err)
-				return
-			}
-
-			fmt.Printf("Attempting to download '%s' from Drive Marketplace...\n", name)
-			if err := cm.DownloadPlugin(name, targetDir); err != nil {
-				os.RemoveAll(targetDir)
-				color.Red("Failed to install plugin '%s': %v", name, err)
-				src.LogAction("PLUGIN_INSTALL_FAILED", fmt.Sprintf("Plugin: %s, Error: %v", name, err))
-				return
-			}
-
-			color.Green("Plugin '%s' installed successfully.", name)
-			src.LogAction("PLUGIN_INSTALLED", fmt.Sprintf("Plugin: %s", name))
-		},
-	}
-
-	var pluginsInstallCmd = &cobra.Command{
-		Use:   "install [name]",
-		Short: "Install a plugin from Marketplace",
-		Run: func(cmd *cobra.Command, args []string) {
-			pluginsAddCmd.Run(cmd, args)
-		},
-	}
-
-	var pluginsPushCmd = &cobra.Command{
-		Use:   "push [name]",
-		Short: "Push a plugin to the Google Drive marketplace",
-		Run: func(cmd *cobra.Command, args []string) {
-			if len(args) < 1 {
-				color.Red("Usage: pm plugins push <name> [--path <local-plugin-dir>]")
-				return
-			}
-			name := strings.TrimSpace(args[0])
-			localPath, _ := cmd.Flags().GetString("path")
-			sourcePath := strings.TrimSpace(localPath)
-			if sourcePath == "" {
-				sourcePath = filepath.Join(pluginMgr.PluginsDir, name)
-				if stat, err := os.Stat(sourcePath); err != nil || !stat.IsDir() {
-					cwdCandidate := filepath.Join(".", name)
-					if cwdStat, cwdErr := os.Stat(cwdCandidate); cwdErr == nil && cwdStat.IsDir() {
-						sourcePath = cwdCandidate
-					}
-				}
-			}
-			sourcePath = filepath.Clean(sourcePath)
-			info, err := os.Stat(sourcePath)
-			if err != nil || !info.IsDir() {
-				color.Red("Invalid plugin source directory: %s", sourcePath)
-				return
-			}
-
-			pluginDefPath := filepath.Join(sourcePath, "plugin.json")
-			def, loadErr := plugins.LoadPluginDef(pluginDefPath)
-			if loadErr != nil {
-				color.Red("Invalid plugin source. '%s' is required and must be valid: %v", pluginDefPath, loadErr)
-				return
-			}
-			if strings.TrimSpace(def.Name) != "" && def.Name != name {
-				color.Yellow("Plugin manifest name is '%s'. Uploading as '%s'.", def.Name, name)
-			}
-
-			cm, err := getCloudManagerEx(context.Background(), nil, "", "gdrive")
-			if err != nil {
-				color.Red("Error connecting to plugin marketplace: %v", err)
-				return
-			}
-
-			if err := cm.UploadPlugin(name, sourcePath); err != nil {
-				color.Red("Failed to push plugin '%s': %v", name, err)
-				return
-			}
-
-			color.Green("Plugin '%s' pushed to marketplace successfully.", name)
-			src.LogAction("PLUGIN_PUSH", fmt.Sprintf("Plugin '%s' pushed from %s", name, sourcePath))
-		},
-	}
-	pluginsPushCmd.Flags().String("path", "", "Optional local plugin directory (defaults to installed plugin path)")
-
-	var pluginsRemoveCmd = &cobra.Command{
-		Use:   "remove [name]",
-		Short: "Remove a plugin",
-		Run: func(cmd *cobra.Command, args []string) {
-			if len(args) < 1 {
-				color.Red("Usage: pm plugins remove <name>")
-				return
-			}
-			name := args[0]
-			if err := pluginMgr.RemovePlugin(name); err != nil {
-				color.Red("Error removing plugin: %v\n", err)
-				src.LogAction("PLUGIN_REMOVE_FAILED", fmt.Sprintf("Plugin: %s, Error: %v", name, err))
-				return
-			}
-			color.Green("Plugin %s removed successfully.\n", name)
-			src.LogAction("PLUGIN_REMOVED", fmt.Sprintf("Plugin: %s", name))
-		},
-	}
-
-	var pluginSearchCmd = &cobra.Command{
-		Use:   "search",
-		Short: "Search for plugins in the marketplace",
-		Run: func(cmd *cobra.Command, args []string) {
-			masterPassword, vault, _, err := src_unlockVault()
-			if err != nil {
-				return
-			}
-			cm, err := getCloudManagerEx(context.Background(), vault, masterPassword, "gdrive")
-			if err != nil {
-				color.Red("Error connecting to cloud: %v", err)
-				return
-			}
-			plugins, err := cm.ListMarketplacePlugins()
-			if err != nil {
-				color.Red("Error listing plugins: %v", err)
-				return
-			}
-			if len(plugins) == 0 {
-				fmt.Println("No plugins found in marketplace.")
-				return
-			}
-			fmt.Println("Marketplace Plugins:")
-			for _, p := range plugins {
-				fmt.Println(p)
-			}
-		},
-	}
-
-	var pluginLocalCmd = &cobra.Command{
-		Use:   "local [path]",
-		Short: "Install a plugin from a local directory",
-		Args:  cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			pluginPath := args[0]
-			if _, err := os.Stat(filepath.Join(pluginPath, "plugin.json")); os.IsNotExist(err) {
-				color.Red("Invalid plugin directory: plugin.json not found")
-				return
-			}
-
-			def, err := plugins.LoadPluginDef(filepath.Join(pluginPath, "plugin.json"))
-			if err != nil {
-				color.Red("Invalid manifest: %v", err)
-				return
-			}
-
-			if err := pluginMgr.InstallPlugin(def.Name, pluginPath); err != nil {
-				color.Red("Installation failed: %v", err)
-				src.LogAction("PLUGIN_INSTALL_FAILED", fmt.Sprintf("Plugin: %s, Error: %v", def.Name, err))
-				return
-			}
-			color.Green("Plugin '%s' installed successfully from local source.", def.Name)
-			src.LogAction("PLUGIN_INSTALLED", fmt.Sprintf("Plugin: %s (local)", def.Name))
-		},
-	}
-
-	var runInteractivePluginAccess func(v *src.Vault, pass string, pluginName string, plugin *plugins.Plugin)
-
-	var pluginAccessCmd = &cobra.Command{
-		Use:   "access [plugin] [permission] [on|off]",
-		Short: "View or change plugin permission access (2 args toggles)",
-		Args:  cobra.MaximumNArgs(3),
-		Run: func(cmd *cobra.Command, args []string) {
-			pass, vault, readonly, err := src_unlockVault()
-			if err != nil {
-				color.Red("Error: %v", err)
-				return
-			}
-
-			resolvePlugin := func(input string) (string, *plugins.Plugin, bool) {
-				target := strings.TrimSpace(input)
-				for loadedName, loadedPlugin := range pluginMgr.Loaded {
-					if strings.EqualFold(strings.TrimSpace(loadedName), target) {
-						return loadedName, loadedPlugin, true
-					}
-				}
-				return "", nil, false
-			}
-
-			printPluginPermissions := func(displayName string, plugin *plugins.Plugin) {
-				fmt.Printf("%s\n", displayName)
-				perms := append([]string{}, plugin.Definition.Permissions...)
-				sort.Strings(perms)
-				for _, permission := range perms {
-					status := "ON"
-					if !pluginPermissionEnabled(vault, plugin.Definition.Name, permission) {
-						status = "OFF"
-					}
-					fmt.Printf("  %-28s %s\n", permission, status)
-				}
-			}
-
-			if len(args) == 0 {
-				if len(pluginMgr.Loaded) == 0 {
-					fmt.Println("No plugins loaded.")
-					return
-				}
-				names := make([]string, 0, len(pluginMgr.Loaded))
-				for name := range pluginMgr.Loaded {
-					names = append(names, name)
-				}
-				sort.Strings(names)
-				for _, name := range names {
-					plugin := pluginMgr.Loaded[name]
-					printPluginPermissions(name, plugin)
-				}
-				fmt.Println("Toggle example: pm plugins access <plugin> <permission>")
-				fmt.Println("Set example:    pm plugins access <plugin> <permission> on|off")
-				return
-			}
-
-			displayName, plugin, ok := resolvePlugin(args[0])
-			if !ok {
-				color.Red("Plugin '%s' not found.", strings.TrimSpace(args[0]))
-				return
-			}
-
-			if len(args) == 1 {
-				runInteractivePluginAccess(vault, pass, displayName, plugin)
-				return
-			}
-
-			if len(args) < 2 || len(args) > 3 {
-				color.Red("Usage: pm plugins access [plugin] [permission] [on|off]")
-				return
-			}
-			if readonly {
-				color.Red("Vault is READ-ONLY. Cannot modify plugin permissions.")
-				return
-			}
-
-			permission := strings.TrimSpace(args[1])
-
-			known := false
-			for _, p := range plugin.Definition.Permissions {
-				if strings.EqualFold(p, permission) {
-					permission = p
-					known = true
-					break
-				}
-			}
-			if !known {
-				color.Red("Permission '%s' is not declared by plugin '%s'.", permission, displayName)
-				return
-			}
-
-			stateRaw := ""
-			enabled := false
-			if len(args) == 2 {
-				enabled = !pluginPermissionEnabled(vault, plugin.Definition.Name, permission)
-				if enabled {
-					stateRaw = "on"
-				} else {
-					stateRaw = "off"
-				}
-			} else {
-				stateRaw = strings.ToLower(strings.TrimSpace(args[2]))
-				switch stateRaw {
-				case "on", "true", "1", "yes":
-					enabled = true
-				case "off", "false", "0", "no":
-					enabled = false
-				default:
-					color.Red("State must be 'on' or 'off'.")
-					return
-				}
-			}
-
-			setPluginPermissionOverride(vault, plugin.Definition.Name, permission, enabled)
-			if err := saveVaultState(vault, pass); err != nil {
-				color.Red("Failed to save permission change: %v", err)
-				return
-			}
-			color.Green("Plugin '%s' permission '%s' set to %s.", displayName, permission, strings.ToUpper(stateRaw))
-		},
-	}
-
-	runInteractivePluginAccess = func(v *src.Vault, pass string, pluginName string, plugin *plugins.Plugin) {
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			fmt.Printf("Plugin: %s\n", pluginName)
-			perms := append([]string{}, plugin.Definition.Permissions...)
-			sort.Strings(perms)
-			for _, permission := range perms {
-				state := "OFF"
-				if pluginPermissionEnabled(v, plugin.Definition.Name, permission) {
-					state = "ON"
-				}
-				fmt.Printf("  %-28s %s\n", permission, state)
-			}
-			return
-		}
-
-		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-		if err != nil {
-			color.Red("Failed to initialize interactive view: %v", err)
-			return
-		}
-		defer term.Restore(int(os.Stdin.Fd()), oldState)
-
-		fmt.Print("\x1b[?25l")
-		defer fmt.Print("\x1b[?25h")
-
-		perms := append([]string{}, plugin.Definition.Permissions...)
-		sort.Strings(perms)
-
-		if len(perms) == 0 {
-			term.Restore(int(os.Stdin.Fd()), oldState)
-			fmt.Println("\x1b[?25hPlugin requires no permissions.")
-			return
-		}
-
-		statusMap := make(map[string]bool)
-		for _, p := range perms {
-			statusMap[p] = pluginPermissionEnabled(v, plugin.Definition.Name, p)
-		}
-
-		selectedIndex := 0
-		statusMsg := ""
-
-		render := func() {
-			fmt.Print("\033[H\033[J")
-			fmt.Printf("\r\x1b[1;36mAPM Plugin Access\x1b[0m | Plugin: \x1b[1;32m%s\x1b[0m\r\n", pluginName)
-			fmt.Print("\rUp/Down: Navigate | Space: Toggle | Enter: Save | Esc/q: Cancel\r\n")
-			if statusMsg != "" {
-				fmt.Printf("\r%s\r\n", statusMsg)
-				statusMsg = ""
-			}
-			fmt.Print("\r" + strings.Repeat("-", 50) + "\r\n")
-
-			for i, p := range perms {
-				cursor := " "
-				if i == selectedIndex {
-					cursor = "\x1b[1;34m>\x1b[0m"
-				}
-				checkbox := "[ ]"
-				colorCode := ""
-				if statusMap[p] {
-					checkbox = "[\x1b[1;32mx\x1b[0m]"
-					colorCode = "\x1b[1;32m"
-				}
-
-				fmt.Printf("\r%s %s %s%-30s\x1b[0m\r\n", cursor, checkbox, colorCode, p)
-			}
-		}
-
-		b := make([]byte, 3)
-		for {
-			render()
-			os.Stdin.Read(b)
-			if b[0] == 27 {
-				if b[1] == 91 {
-					if b[2] == 65 {
-						selectedIndex--
-						if selectedIndex < 0 {
-							selectedIndex = len(perms) - 1
-						}
-					} else if b[2] == 66 {
-						selectedIndex++
-						if selectedIndex >= len(perms) {
-							selectedIndex = 0
-						}
-					}
-				} else {
-					return
-				}
-			} else if b[0] == '\r' || b[0] == '\n' {
-				break
-			} else if b[0] == ' ' {
-				p := perms[selectedIndex]
-				statusMap[p] = !statusMap[p]
-			} else if b[0] == 'q' || b[0] == 3 {
-				return
-			}
-			b[1] = 0
-			b[2] = 0
-		}
-
-		term.Restore(int(os.Stdin.Fd()), oldState)
-		fmt.Print("\x1b[?25h\033[H\033[J")
-
-		changed := false
-		for p, enabled := range statusMap {
-			wasEnabled := pluginPermissionEnabled(v, plugin.Definition.Name, p)
-			if enabled != wasEnabled {
-				setPluginPermissionOverride(v, plugin.Definition.Name, p, enabled)
-				changed = true
-			}
-		}
-
-		if changed {
-			if err := saveVaultState(v, pass); err != nil {
-				color.Red("Failed to save changes: %v", err)
-			} else {
-				color.Green("Plugin permissions updated successfully.")
-			}
-		} else {
-			fmt.Println("No changes made.")
-		}
-	}
-
-	executePluginCommand := func(pluginName string, plugin *plugins.Plugin, commandName string, cmdDef plugins.CommandDef, overrides map[string]string, args []string) error {
-		pass, vault, readonly, err := src_unlockVault()
-		if err != nil {
-			return err
-		}
-		if readonly {
-			return fmt.Errorf("vault is READ-ONLY. Plugin commands are disabled in read-only mode")
-		}
-
-		ctx := plugins.NewExecutionContext()
-		for flagName, flagDef := range cmdDef.Flags {
-			value := strings.TrimSpace(overrides[flagName])
-			if value == "" {
-				value = flagDef.Default
-			}
-			ctx.Variables[flagName] = value
-		}
-		for i, arg := range args {
-			ctx.Variables[fmt.Sprintf("arg%d", i+1)] = arg
-		}
-
-		effectivePerms := applyPluginPermissionOverrides(vault, plugin.Definition.Name, plugin.Definition.Permissions)
-		executor := plugins.NewStepExecutor(ctx, vault, vaultPath)
-		if err := executor.ExecuteSteps(cmdDef.Steps, effectivePerms); err != nil {
-			return err
-		}
-		return saveVaultState(vault, pass)
-	}
-
-	var pluginRunCmd = &cobra.Command{
-		Use:   "run [plugin] [command] [args...]",
-		Short: "Run an installed plugin command",
-		Args:  cobra.MinimumNArgs(2),
-		Run: func(cmd *cobra.Command, args []string) {
-			pluginInput := strings.TrimSpace(args[0])
-			commandInput := strings.TrimSpace(args[1])
-
-			var (
-				pluginName string
-				plugin     *plugins.Plugin
-				found      bool
-			)
-			for loadedName, loadedPlugin := range pluginMgr.Loaded {
-				if strings.EqualFold(strings.TrimSpace(loadedName), pluginInput) {
-					pluginName = loadedName
-					plugin = loadedPlugin
-					found = true
-					break
-				}
-			}
-			if !found || plugin == nil || plugin.Definition == nil {
-				color.Red("Plugin '%s' not found.", pluginInput)
-				return
-			}
-
-			var (
-				commandName string
-				cmdDef      plugins.CommandDef
-				cmdFound    bool
-			)
-			for loadedCommand, loadedDef := range plugin.Definition.Commands {
-				if strings.EqualFold(strings.TrimSpace(loadedCommand), commandInput) {
-					commandName = loadedCommand
-					cmdDef = loadedDef
-					cmdFound = true
-					break
-				}
-			}
-			if !cmdFound {
-				color.Red("Command '%s' not found in plugin '%s'.", commandInput, pluginName)
-				return
-			}
-
-			rawOverrides, _ := cmd.Flags().GetStringArray("set")
-			overrides := make(map[string]string)
-			for _, pair := range rawOverrides {
-				parts := strings.SplitN(pair, "=", 2)
-				if len(parts) != 2 {
-					continue
-				}
-				key := strings.TrimSpace(parts[0])
-				value := strings.TrimSpace(parts[1])
-				if key == "" {
-					continue
-				}
-				overrides[key] = value
-			}
-
-			if err := executePluginCommand(pluginName, plugin, commandName, cmdDef, overrides, args[2:]); err != nil {
-				color.Red("Plugin command failed: %v", err)
-			}
-		},
-	}
-	pluginRunCmd.Flags().StringArray("set", nil, "Set plugin flag as key=value (repeatable)")
-
-	pluginsCmd.AddCommand(pluginsInstalledCmd, pluginsListCmd, pluginsMarketCmd, pluginsAddCmd, pluginsInstallCmd, pluginsPushCmd, pluginsRemoveCmd, pluginLocalCmd, pluginSearchCmd, pluginAccessCmd, pluginRunCmd)
-
 	var setupCmd = &cobra.Command{
 		Use:   "setup",
-		Short: "Complete APM setup wizard (vault, profile, spaces, plugins, cloud)",
+		Short: "Complete APM setup wizard (vault, profile, spaces, cloud)",
 		Run: func(cmd *cobra.Command, args []string) {
 			nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
 
-			totalSteps := 7
+			totalSteps := 6
 			step := 1
 			color.HiCyan("APM Setup")
-			fmt.Println("Unified setup flow: project configuration, vault initialization, profiles, spaces, plugins, and cloud sync.")
+			fmt.Println("Unified setup flow: project configuration, vault initialization, profiles, spaces, and cloud sync.")
 			fmt.Println()
 
 			color.Yellow("[%d/%d] Environment and project checks", step, totalSteps)
@@ -2905,14 +2316,9 @@ func main() {
 				color.Red("Setup failed while creating policies directory '%s': %v", policyDir, err)
 				return
 			}
-			if err := os.MkdirAll(pluginMgr.PluginsDir, 0750); err != nil {
-				color.Red("Setup failed while creating plugins directory '%s': %v", pluginMgr.PluginsDir, err)
-				return
-			}
 			color.Green("Project directories ready:")
 			fmt.Printf("- Vault: %s\n", vaultPath)
 			fmt.Printf("- Policies: %s\n", policyDir)
-			fmt.Printf("- Plugins: %s\n", pluginMgr.PluginsDir)
 			fmt.Println()
 
 			color.Yellow("[%d/%d] Vault initialization and unlock", step, totalSteps)
@@ -3064,53 +2470,6 @@ func main() {
 					if !found {
 						color.Yellow("Space '%s' was not found. Keeping default.", targetSpace)
 						vault.CurrentSpace = ""
-					}
-				}
-			}
-			fmt.Println()
-
-			color.Yellow("[%d/%d] Plugins setup", step, totalSteps)
-			step++
-			if !nonInteractive {
-				fmt.Print("Install plugins during setup? (y/n) [n]: ")
-				if strings.ToLower(strings.TrimSpace(readInput())) == "y" {
-					fmt.Print("Install from marketplace by name (comma-separated, optional): ")
-					pluginNames := strings.TrimSpace(readInput())
-					if pluginNames != "" {
-						cm, err := getCloudManagerEx(context.Background(), nil, "", "gdrive")
-						if err != nil {
-							color.Red("Could not connect to plugin marketplace: %v", err)
-						} else {
-							for _, name := range strings.Split(pluginNames, ",") {
-								trimmed := strings.TrimSpace(name)
-								if trimmed == "" {
-									continue
-								}
-								targetDir := filepath.Join(pluginMgr.PluginsDir, trimmed)
-								if err := cm.DownloadPlugin(trimmed, targetDir); err != nil {
-									color.Red("Plugin '%s' install failed: %v", trimmed, err)
-								} else {
-									color.Green("Plugin '%s' installed.", trimmed)
-								}
-							}
-						}
-					}
-
-					fmt.Print("Install local plugin path (optional, leave blank to skip): ")
-					localPath := strings.TrimSpace(readInput())
-					if localPath != "" {
-						if _, err := os.Stat(filepath.Join(localPath, "plugin.json")); err != nil {
-							color.Red("Local plugin path invalid: %v", err)
-						} else {
-							def, err := plugins.LoadPluginDef(filepath.Join(localPath, "plugin.json"))
-							if err != nil {
-								color.Red("Invalid local plugin manifest: %v", err)
-							} else if err := pluginMgr.InstallPlugin(def.Name, localPath); err != nil {
-								color.Red("Local plugin install failed: %v", err)
-							} else {
-								color.Green("Local plugin '%s' installed.", def.Name)
-							}
-						}
 					}
 				}
 			}
@@ -3711,28 +3070,10 @@ func main() {
 	policyCmd.AddCommand(policyLoadCmd, policyShowCmd, policyClearCmd)
 	loadedCmd := &cobra.Command{
 		Use:   "loaded",
-		Short: "Show loaded plugins, policies, and .apmignore state",
+		Short: "Show loaded policies and .apmignore state",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Println("Loaded state")
 			fmt.Println("============")
-
-			fmt.Println("\n[plugins]")
-			if pluginMgr == nil {
-				fmt.Println("error: plugin manager unavailable")
-			} else {
-				if err := pluginMgr.LoadPlugins(); err != nil {
-					fmt.Printf("error: %v\n", err)
-				}
-				list := pluginMgr.ListPlugins()
-				if len(list) == 0 {
-					fmt.Println("(none)")
-				} else {
-					sort.Strings(list)
-					for _, name := range list {
-						fmt.Printf("- %s\n", name)
-					}
-				}
-			}
 
 			fmt.Println("\n[policies]")
 			policyDir := filepath.Join(filepath.Dir(vaultPath), "policies")
@@ -3863,7 +3204,7 @@ func main() {
 	cleanupCmd.Flags().BoolP("yes", "y", false, "Auto-apply all fixes without prompting")
 	cleanupCmd.Flags().Bool("dry-run", false, "Scan only, don't make any changes")
 
-	rootCmd.AddCommand(addCmd, getCmd, genCmd, modeCmd, sessionCmd, cinfoCmd, logsCmd, lgitCmd, trustCmd, totpCmd, importCmd, exportCmd, infoCmd, cloudCmd, healthCmd, policyCmd, spaceCmd, pluginsCmd, setupCmd, unlockCmd, lockCmd, profileCmd, compromiseCmd, authCmd, loadedCmd, cleanupCmd, injectcmd.BuildInjectCmd(src_unlockVault))
+	rootCmd.AddCommand(addCmd, getCmd, genCmd, modeCmd, sessionCmd, cinfoCmd, logsCmd, lgitCmd, trustCmd, totpCmd, importCmd, exportCmd, infoCmd, cloudCmd, healthCmd, policyCmd, spaceCmd, setupCmd, unlockCmd, lockCmd, profileCmd, compromiseCmd, authCmd, loadedCmd, cleanupCmd, injectcmd.BuildInjectCmd(src_unlockVault))
 	authCmd.AddCommand(authEmailCmd, authResetCmd, authChangeCmd, authRecoverCmd, authAlertsCmd, authLevelCmd, authQuorumSetupCmd, authQuorumRecoverCmd, authPasskeyCmd, authCodesCmd, authTouchIDCmd)
 	authPasskeyCmd.AddCommand(authPasskeyRegisterCmd, authPasskeyVerifyCmd, authPasskeyDisableCmd)
 	authCodesCmd.AddCommand(authCodesGenerateCmd, authCodesStatusCmd)
@@ -3880,91 +3221,7 @@ func main() {
 	updateCmd.Flags().Bool("force", false, "Force update even if version is latest")
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(mcpCmd)
-
-	registerDynamicPluginCommands := func() {
-		existingNames := make(map[string]struct{})
-		for _, registered := range rootCmd.Commands() {
-			existingNames[strings.ToLower(strings.TrimSpace(registered.Name()))] = struct{}{}
-			for _, alias := range registered.Aliases {
-				existingNames[strings.ToLower(strings.TrimSpace(alias))] = struct{}{}
-			}
-		}
-
-		pluginNames := make([]string, 0, len(pluginMgr.Loaded))
-		for name := range pluginMgr.Loaded {
-			pluginNames = append(pluginNames, name)
-		}
-		sort.Strings(pluginNames)
-
-		for _, pluginName := range pluginNames {
-			plugin := pluginMgr.Loaded[pluginName]
-			if plugin == nil || plugin.Definition == nil || len(plugin.Definition.Commands) == 0 {
-				continue
-			}
-
-			commandNames := make([]string, 0, len(plugin.Definition.Commands))
-			for commandName := range plugin.Definition.Commands {
-				commandNames = append(commandNames, commandName)
-			}
-			sort.Strings(commandNames)
-
-			for _, commandName := range commandNames {
-				cmdDef := plugin.Definition.Commands[commandName]
-				useName := strings.TrimSpace(commandName)
-				if useName == "" {
-					continue
-				}
-
-				useKey := strings.ToLower(useName)
-				if _, exists := existingNames[useKey]; exists {
-					continue
-				}
-
-				pluginNameCopy := pluginName
-				pluginCopy := plugin
-				commandNameCopy := commandName
-				cmdDefCopy := cmdDef
-
-				short := strings.TrimSpace(cmdDefCopy.Description)
-				if short == "" {
-					short = fmt.Sprintf("Plugin command: %s/%s", pluginNameCopy, commandNameCopy)
-				}
-
-				registeredCmd := &cobra.Command{
-					Use:   useName,
-					Short: short,
-					Args:  cobra.ArbitraryArgs,
-					Run: func(cmd *cobra.Command, args []string) {
-						overrides := make(map[string]string)
-						for flagName := range cmdDefCopy.Flags {
-							value, _ := cmd.Flags().GetString(flagName)
-							if strings.TrimSpace(value) != "" {
-								overrides[flagName] = value
-							}
-						}
-
-						if err := executePluginCommand(pluginNameCopy, pluginCopy, commandNameCopy, cmdDefCopy, overrides, args); err != nil {
-							color.Red("Plugin command failed: %v", err)
-						}
-					},
-				}
-
-				flagNames := make([]string, 0, len(cmdDefCopy.Flags))
-				for flagName := range cmdDefCopy.Flags {
-					flagNames = append(flagNames, flagName)
-				}
-				sort.Strings(flagNames)
-				for _, flagName := range flagNames {
-					flagDef := cmdDefCopy.Flags[flagName]
-					registeredCmd.Flags().String(flagName, flagDef.Default, fmt.Sprintf("Plugin flag (%s)", flagDef.Type))
-				}
-
-				rootCmd.AddCommand(registeredCmd)
-				existingNames[useKey] = struct{}{}
-			}
-		}
-	}
-	registerDynamicPluginCommands()
+	rootCmd.AddCommand(newDesktopCmd())
 
 	rootCmd.PersistentFlags().StringVarP(&vaultPath, "vault", "v", vaultPath, "Vault file path")
 	rootCmd.Execute()
@@ -4600,7 +3857,6 @@ func src_unlockVault() (string, *src.Vault, bool, error) {
 			src.CreateSession(pass, 1*time.Hour, false, 15*time.Minute)
 			color.Cyan("vault has been unlocked. you will be asked to reauthenticate after 15 minutes of inactivity/1 hour.")
 
-			pluginMgr.ExecuteHooks("post", "unlock", vault, vaultPath)
 			return pass, vault, false, nil
 		}
 
@@ -5278,51 +4534,6 @@ func runInteractiveTOTP(v *src.Vault, masterPassword string) {
 		case <-ticker.C:
 		}
 	}
-}
-
-func pluginPermissionEnabled(vault *src.Vault, pluginName, permission string) bool {
-	if vault == nil || vault.PluginPermissionOverrides == nil {
-		return true
-	}
-	pluginKey := strings.ToLower(strings.TrimSpace(pluginName))
-	permKey := strings.ToLower(strings.TrimSpace(permission))
-	if pluginKey == "" || permKey == "" {
-		return true
-	}
-	pluginRules := vault.PluginPermissionOverrides[pluginKey]
-	if len(pluginRules) == 0 {
-		return true
-	}
-	enabled, exists := pluginRules[permKey]
-	if !exists {
-		return true
-	}
-	return enabled
-}
-
-func setPluginPermissionOverride(vault *src.Vault, pluginName, permission string, enabled bool) {
-	if vault.PluginPermissionOverrides == nil {
-		vault.PluginPermissionOverrides = make(map[string]map[string]bool)
-	}
-	pluginKey := strings.ToLower(strings.TrimSpace(pluginName))
-	permKey := strings.ToLower(strings.TrimSpace(permission))
-	if pluginKey == "" || permKey == "" {
-		return
-	}
-	if vault.PluginPermissionOverrides[pluginKey] == nil {
-		vault.PluginPermissionOverrides[pluginKey] = make(map[string]bool)
-	}
-	vault.PluginPermissionOverrides[pluginKey][permKey] = enabled
-}
-
-func applyPluginPermissionOverrides(vault *src.Vault, pluginName string, declared []string) []string {
-	filtered := make([]string, 0, len(declared))
-	for _, permission := range declared {
-		if pluginPermissionEnabled(vault, pluginName, permission) {
-			filtered = append(filtered, permission)
-		}
-	}
-	return filtered
 }
 
 func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, readonly, showPass bool, oldState *term.State) {
@@ -7697,7 +6908,7 @@ var mcpServeCmd = &cobra.Command{
 				break
 			}
 		}
-		if err := src.StartMCPServer(token, vaultPath, nil, pluginMgr); err != nil {
+		if err := src.StartMCPServer(token, vaultPath, nil); err != nil {
 			fmt.Fprintf(os.Stderr, "MCP Server Error: %v\n", err)
 			os.Exit(1)
 		}

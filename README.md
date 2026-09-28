@@ -25,7 +25,6 @@ APM is a fast, zero-knowledge CLI password manager written in Go and Rust. It st
 - **Dual encryption** — choose AES-256-GCM or XChaCha20-Poly1305. Double-layer integrity via HMAC-SHA256 on top of AEAD authentication.
 - **Portable** — one vault file, one binary. Take your vault anywhere.
 - **Optional cloud** — sync to Google Drive, GitHub, or Dropbox. Fully opt-in; no account required to use APM.
-- **Extensible** — a manifest-based plugin system with 100+ granular permissions, lifecycle hooks, and a plugin marketplace.
 - **AI-ready** — native MCP server with scoped tokens so Claude, Cursor, or any MCP-compatible agent can access your vault safely.
 - **Team-ready** — full RBAC, departments, approval workflows, and shared vaults in `pm-team`.
 
@@ -110,12 +109,6 @@ APM supports **25 structured secret types** with validated fields and type-speci
 - Scoped permission tokens: `read`, `secrets`, `write`, `admin`
 - Transaction guardrails for write ops: preview → approve → receipt
 - Works with Claude Desktop, Cursor, Windsurf, and any MCP client
-
-**Plugins**
-- Manifest-based plugin system
-- 100+ granular permissions across vault, network, system, crypto, UI, and cloud
-- Hook system for vault lifecycle events
-- Plugin marketplace via cloud providers
 
 
 

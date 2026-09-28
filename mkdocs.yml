@@ -93,7 +93,6 @@ nav:
     - Injecting secrets into your shell: guides/inject.md
     - Generating TOTP codes: guides/totp.md
     - Managing sessions: guides/sessions.md
-    - Using plugins: guides/plugins.md
     - MCP integration: guides/mcp-integration.md
     - Team edition: guides/team-edition.md
     - Importing and exporting: guides/import-export.md
@@ -107,7 +106,6 @@ nav:
     - Policy engine: concepts/policy-engine.md
     - Sessions: concepts/sessions.md
     - Cloud synchronization: concepts/cloud-sync.md
-    - Plugins: concepts/plugins.md
     - MCP server: concepts/mcp.md
     - Recovery: concepts/recovery.md
   - Reference:
@@ -116,7 +114,6 @@ nav:
     - .apmignore: reference/apmignore.md
     - Storage: reference/storage.md
     - Environment variables: reference/environment-variables.md
-    - Plugin API: reference/plugin-api.md
     - MCP tools: reference/mcp-tools.md
     - Policies: reference/policies.md
   - Team:
