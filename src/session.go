@@ -23,6 +23,27 @@ type Session struct {
 	Expiry            time.Time     `json:"expiry"`
 	LastUsed          time.Time     `json:"last_used"`
 	InactivityTimeout time.Duration `json:"inactivity_timeout"`
+	// LockOnSleep ends the session once the computer has slept. SleepMark is
+	// the platform's sleep counter when the session started.
+	LockOnSleep bool  `json:"lock_on_sleep,omitempty"`
+	SleepMark   int64 `json:"sleep_mark,omitempty"`
+}
+
+// SleepLockSupported reports whether pm can tell that the computer slept.
+func SleepLockSupported() bool {
+	_, ok := sleepMark()
+	return ok
+}
+
+// Slept reports whether the session should end because the computer slept.
+func (s Session) Slept() bool {
+	return s.LockOnSleep && sleptSince(s.SleepMark)
+}
+
+// Expired reports whether the session has passed its maximum length. A zero
+// Expiry means the session has no maximum length.
+func (s Session) Expired(now time.Time) bool {
+	return !s.Expiry.IsZero() && now.After(s.Expiry)
 }
 
 type sessionEnvelope struct {
@@ -49,12 +70,26 @@ func getSessionFile() string {
 }
 
 func CreateSession(password string, duration time.Duration, readonly bool, inactivity time.Duration) error {
+	return CreateLockingSession(password, duration, readonly, inactivity, false)
+}
+
+// CreateLockingSession is CreateSession that can also end when the computer
+// sleeps. A zero duration or inactivity means no limit.
+func CreateLockingSession(password string, duration time.Duration, readonly bool, inactivity time.Duration, lockOnSleep bool) error {
 	session := Session{
 		MasterPassword:    password,
 		ReadOnly:          readonly,
-		Expiry:            time.Now().Add(duration),
 		LastUsed:          time.Now(),
 		InactivityTimeout: inactivity,
+	}
+	if duration > 0 {
+		session.Expiry = time.Now().Add(duration)
+	}
+	if lockOnSleep {
+		if mark, ok := sleepMark(); ok {
+			session.LockOnSleep = true
+			session.SleepMark = mark
+		}
 	}
 
 	data, err := encryptSessionData(session)
@@ -67,10 +102,12 @@ func CreateSession(password string, duration time.Duration, readonly bool, inact
 		return err
 	}
 
-	go func() {
-		time.Sleep(duration)
-		_ = os.Remove(sessionFile)
-	}()
+	if duration > 0 {
+		go func() {
+			time.Sleep(duration)
+			_ = os.Remove(sessionFile)
+		}()
+	}
 
 	return nil
 }
@@ -95,7 +132,7 @@ func GetSession() (*Session, error) {
 	}
 
 	now := time.Now()
-	if now.After(session.Expiry) {
+	if session.Expired(now) {
 		_ = os.Remove(sessionFile)
 		return nil, errors.New("session expired")
 	}
@@ -103,6 +140,11 @@ func GetSession() (*Session, error) {
 	if session.InactivityTimeout > 0 && now.Sub(session.LastUsed) > session.InactivityTimeout {
 		_ = os.Remove(sessionFile)
 		return nil, errors.New("session locked due to inactivity")
+	}
+
+	if session.Slept() {
+		_ = os.Remove(sessionFile)
+		return nil, errors.New("session locked because the computer slept")
 	}
 
 	session.LastUsed = now

@@ -27,6 +27,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/pquerna/otp v1.5.0
 	gocv.io/x/gocv v0.43.0
+	golang.org/x/net v0.51.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sys v0.41.0
 	google.golang.org/api v0.271.0
@@ -92,7 +93,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
 	golang.org/x/image v0.25.0 // indirect
-	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	gonum.org/v1/plot v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect

@@ -62,6 +62,23 @@ Created when the autofill daemon starts. Contains the PID, loopback address, bea
 
 ---
 
+## Browser Bridge and Website Icons
+
+These live in the APM config directory: `~/Library/Application Support/apm/` on macOS, `~/.config/apm/` on Linux, `%AppData%\apm\` on Windows. `pm extension link` also writes `dev.apm.bridge.json` into each browser's `NativeMessagingHosts` folder (on Windows, into `native-messaging\` here, with a registry key under `HKCU\Software\<browser>\NativeMessagingHosts`).
+
+| File                    | Purpose                                                           |
+| :---------------------- | :---------------------------------------------------------------- |
+| `bridge_token`          | Pairing token the browser extension sends with every bridge call  |
+| `native_host.json`      | What `pm extension link` registered: the vault, the `pm` binary, the browsers |
+| `extension_link.json`   | A pairing request waiting for `pm extension link` to answer; removed once answered |
+| `extension_seen.json`   | When a paired extension last reached `pm` over native messaging   |
+| `icons/<sha256>.img`    | A cached website logo, named by the SHA-256 of its host           |
+| `icons/<sha256>.json`   | Its host, image type, fetch time and whether the fetch worked     |
+
+The icon cache holds at most 2000 sites and drops the oldest first. Files are written with mode `0600` in a `0700` directory. The cache is not encrypted and each `.json` file names its host, so treat the folder as a list of sites that have logos. Delete the folder, or choose "Clear icon cache" in the desktop app, to empty it. A logo is fetched only from the site itself, over HTTPS, while the vault is unlocked; failures are retried after 3 days and logos refresh after 30 days.
+
+---
+
 ## Cloud Configuration
 
 Cloud provider credentials (OAuth tokens, PATs) are stored **inside the encrypted vault** — not in separate files. This ensures they're protected by the same encryption and travel with the vault during sync.

@@ -101,12 +101,23 @@ func init() {
 		"mcp.config":                {fn: hMCPConfig},
 		"data.export":               {fn: hDataExport},
 		"data.import":               {fn: hDataImport},
+		"transfer.formats":          {fn: hTransferFormats},
+		"transfer.preview":          {fn: hTransferPreview, long: true},
+		"transfer.compare":          {fn: hTransferCompare, long: true},
+		"transfer.plan":             {fn: hTransferPlan},
+		"transfer.apply":            {fn: hTransferApply},
+		"transfer.discard":          {fn: hTransferDiscard},
+		"transfer.exportPreview":    {fn: hTransferExportPreview},
+		"transfer.export":           {fn: hTransferExport, long: true},
 		"cleanup.scan":              {fn: hCleanupScan},
 		"cleanup.apply":             {fn: hCleanupApply},
 		"audit.log":                 {fn: hAuditLog},
 		"inject.preview":            {fn: hInjectPreview},
 		"bridge.info":               {fn: hBridgeInfo},
 		"bridge.rotate":             {fn: hBridgeRotate},
+		"bridge.pairRespond":        {fn: hBridgePairRespond},
+		"icons.get":                 {fn: hIconsGet},
+		"icons.clear":               {fn: hIconsClear},
 	}
 }
 
@@ -203,7 +214,7 @@ func (s *desktopServer) finishUnlock(password string, v *src.Vault, via string, 
 		s.lastWriteHash = sha256Hex(data)
 	}
 	if createSession {
-		_ = src.CreateSession(password, time.Hour, false, 15*time.Minute)
+		_ = lockPolicyOf(v).startSession(password, false)
 	}
 	details := "Desktop unlock"
 	if via != "" {
@@ -330,6 +341,9 @@ func hVaultUnlockSession(s *desktopServer, p json.RawMessage) (any, error) {
 	res := s.finishUnlock(sess.MasterPassword, v, "CLI session", false)
 	if sess.ReadOnly {
 		s.readonlyUntil = sess.Expiry
+		if s.readonlyUntil.IsZero() {
+			s.readonlyUntil = time.Now().AddDate(1, 0, 0)
+		}
 		res["snapshot"] = s.snapshot()
 	}
 	return res, nil
@@ -1343,7 +1357,7 @@ func hTOTPOrder(s *desktopServer, p json.RawMessage) (any, error) {
 	var keys []string
 	for _, id := range in.IDs {
 		r, ok := refs[id]
-		if !ok || r.Spec.ID != "totp" {
+		if !ok || !s.vault.HoldsTOTP(r) {
 			continue
 		}
 		k := s.vault.TOTPOrderKey(r)
@@ -1643,7 +1657,7 @@ func hChangePassword(s *desktopServer, p json.RawMessage) (any, error) {
 		}
 		s.password = in.Next
 		_ = src.KillSession()
-		_ = src.CreateSession(in.Next, time.Hour, false, 15*time.Minute)
+		_ = lockPolicyOf(s.vault).startSession(in.Next, false)
 		src.SendAlert(s.vault, src.LevelSettings, "PASSWORD CHANGE", "Master password has been successfully rotated.")
 		src.LogAction("MASTER_PASSWORD_CHANGED", "Changed from the desktop app")
 		return map[string]any{"ok": true}, in.Next, nil
@@ -2795,7 +2809,7 @@ func exportedCount(v *src.Vault, format string) int {
 	if format == "csv" {
 		return n
 	}
-	return n + len(v.TOTPEntries) + len(v.Tokens) + len(v.SecureNotes) + len(v.APIKeys) + len(v.SSHKeys) + len(v.WiFiCredentials) + len(v.RecoveryCodeItems)
+	return n + len(v.AllTOTPs()) + len(v.Tokens) + len(v.SecureNotes) + len(v.APIKeys) + len(v.SSHKeys) + len(v.WiFiCredentials) + len(v.RecoveryCodeItems)
 }
 
 func hDataExport(s *desktopServer, p json.RawMessage) (any, error) {

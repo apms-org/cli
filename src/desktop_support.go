@@ -19,11 +19,14 @@ func PeekSession() (*Session, error) {
 		return nil, errors.New("no active session")
 	}
 	now := time.Now()
-	if now.After(session.Expiry) {
+	if session.Expired(now) {
 		return nil, errors.New("session expired")
 	}
 	if session.InactivityTimeout > 0 && now.Sub(session.LastUsed) > session.InactivityTimeout {
 		return nil, errors.New("session locked due to inactivity")
+	}
+	if session.Slept() {
+		return nil, errors.New("session locked because the computer slept")
 	}
 	session.MasterPassword = ""
 	return &session, nil

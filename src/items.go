@@ -347,6 +347,12 @@ func ItemFields(spec ItemTypeSpec, elem reflect.Value) map[string]any {
 		switch {
 		case fi.Type == reflect.TypeOf([]byte(nil)):
 			continue
+		case fi.Type == reflect.TypeOf([]CustomField(nil)):
+			list := []map[string]any{}
+			for _, cf := range fv.Interface().([]CustomField) {
+				list = append(list, map[string]any{"label": cf.Label, "value": cf.Value, "hidden": cf.Hidden})
+			}
+			out[key] = list
 		case fi.Type == reflect.TypeOf(time.Time{}):
 			t := fv.Interface().(time.Time)
 			if t.IsZero() {
@@ -428,6 +434,34 @@ func toStringList(x any) []string {
 	return nil
 }
 
+func toCustomFields(x any) []CustomField {
+	var out []CustomField
+	add := func(label, value string, hidden bool) {
+		label, value = strings.TrimSpace(label), strings.TrimSpace(value)
+		if label == "" && value == "" {
+			return
+		}
+		out = append(out, CustomField{Label: label, Value: value, Hidden: hidden})
+	}
+	switch t := x.(type) {
+	case []CustomField:
+		for _, cf := range t {
+			add(cf.Label, cf.Value, cf.Hidden)
+		}
+	case []any:
+		for _, e := range t {
+			if m, ok := e.(map[string]any); ok {
+				add(toStringValue(m["label"]), toStringValue(m["value"]), toBool(m["hidden"]))
+			}
+		}
+	case []map[string]any:
+		for _, m := range t {
+			add(toStringValue(m["label"]), toStringValue(m["value"]), toBool(m["hidden"]))
+		}
+	}
+	return out
+}
+
 func toBool(x any) bool {
 	switch t := x.(type) {
 	case bool:
@@ -471,6 +505,19 @@ func SetItemFields(spec ItemTypeSpec, elem reflect.Value, f map[string]any) erro
 		switch {
 		case fi.Type == reflect.TypeOf([]byte(nil)):
 			continue
+		case fi.Type == reflect.TypeOf([]CustomField(nil)):
+			list := toCustomFields(raw)
+			if list == nil {
+				fv.Set(reflect.Zero(fi.Type))
+			} else {
+				fv.Set(reflect.ValueOf(list))
+			}
+		case spec.ID == "password" && key == "totp":
+			secret, err := NormalizeLoginTOTP(toStringValue(raw))
+			if err != nil {
+				return err
+			}
+			fv.SetString(secret)
 		case fi.Type == reflect.TypeOf(time.Time{}):
 			s := strings.TrimSpace(toStringValue(raw))
 			if s == "" {

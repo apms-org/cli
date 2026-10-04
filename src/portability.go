@@ -65,7 +65,7 @@ func ExportToCSV(vault *Vault, filename string) error {
 	for _, e := range vault.Entries {
 		_ = writer.Write([]string{"PASSWORD", e.Account, e.Username, e.Password})
 	}
-	for _, t := range vault.TOTPEntries {
+	for _, t := range vault.AllTOTPs() {
 		_ = writer.Write([]string{"TOTP", t.Account, t.Secret, ""})
 	}
 	for _, tok := range vault.Tokens {
@@ -105,7 +105,7 @@ func ExportToTXT(vault *Vault, filename string, withoutPassword bool) error {
 	}
 
 	sb.WriteString("\nTOTP:\n")
-	for _, t := range vault.TOTPEntries {
+	for _, t := range vault.AllTOTPs() {
 		if withoutPassword {
 			sb.WriteString(fmt.Sprintf("Account: %s\n", t.Account))
 		} else {

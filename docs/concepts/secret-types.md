@@ -6,7 +6,7 @@ The personal `pm` vault currently supports 25 entry types. Every type carries an
 
 | Type | Key fields |
 | :-- | :-- |
-| Password | `account`, `username`, `password` |
+| Password | `account`, `username`, `password`, `website`, `urls[]` |
 | TOTP | `account`, `secret` |
 | Token | `name`, `token`, `type` |
 | Secure note | `name`, `content` |

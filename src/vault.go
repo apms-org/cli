@@ -86,13 +86,24 @@ func newAEAD(key []byte, profile CryptoProfile) (cipher.AEAD, error) {
 }
 
 type Entry struct {
-	Account  string    `json:"account"`
-	Username string    `json:"username"`
-	Password string    `json:"password"`
-	URLs     []string  `json:"urls,omitempty"`
-	Website  string    `json:"website,omitempty"`
-	Space    string    `json:"space,omitempty"`
-	Passkeys []Passkey `json:"passkeys,omitempty"`
+	Account  string        `json:"account"`
+	Username string        `json:"username"`
+	Password string        `json:"password"`
+	URLs     []string      `json:"urls,omitempty"`
+	Website  string        `json:"website,omitempty"`
+	Space    string        `json:"space,omitempty"`
+	Passkeys []Passkey     `json:"passkeys,omitempty"`
+	Notes    string        `json:"notes,omitempty"`
+	TOTP     string        `json:"totp,omitempty"`
+	Fields   []CustomField `json:"fields,omitempty"`
+}
+
+// CustomField is a free-form label/value pair on a login, such as a PIN or a
+// security answer. Hidden values are masked and treated as secrets.
+type CustomField struct {
+	Label  string `json:"label"`
+	Value  string `json:"value"`
+	Hidden bool   `json:"hidden,omitempty"`
 }
 
 type TOTPEntry struct {
@@ -548,15 +559,20 @@ func EncryptVault(vault *Vault, masterPassword string) ([]byte, error) {
 // DecryptVault dispatches between the current header-based format and the
 // pre-header legacy layout that stored salt and ciphertext directly.
 func DecryptVault(data []byte, masterPassword string, costMultiplier int) (*Vault, error) {
+	var v *Vault
+	var err error
 	if len(data) > len(VaultHeader) && string(data[:len(VaultHeader)]) == VaultHeader {
-		return decryptNewVault(data, masterPassword, costMultiplier)
+		v, err = decryptNewVault(data, masterPassword, costMultiplier)
+	} else {
+		if len(data) < 16 {
+			return nil, errors.New("invalid vault data")
+		}
+		v, err = decryptOldVault(data[16:], masterPassword, data[:16])
 	}
-	if len(data) < 16 {
-		return nil, errors.New("invalid vault data")
+	if err == nil && v.MergeLinkedTOTP() > 0 {
+		v.NeedsRepair = true
 	}
-	salt := data[:16]
-	ciphertext := data[16:]
-	return decryptOldVault(ciphertext, masterPassword, salt)
+	return v, err
 }
 
 // decryptNewVault is intentionally tolerant of partially shifted offsets. Older

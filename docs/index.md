@@ -15,6 +15,7 @@ The source tree implements more than a basic password CLI. It includes sessions,
 - Syncs encrypted vault blobs to Google Drive, GitHub, and Dropbox.
 - Exposes a built-in MCP server with scoped tokens and mutation previews.
 - Offers Windows autofill and autocomplete support plus shell-side secret injection.
+- Serves the APM browser extension (logins, one-time codes, passkeys) from the desktop app, or, after `pm extension link`, from `pm` started by the browser itself when the app is closed.
 - Provides a separate team edition with departments, approvals, roles, and shared entries.
 
 ## Quick start

@@ -150,6 +150,9 @@ type desktopServer struct {
 	autoSync      *time.Timer
 	watchTimer    *time.Timer
 	bridge        *desktopBridge
+	sink          func(event string, data any)
+	icons         *iconService
+	transfers     map[string]*pendingTransfer
 }
 
 func newDesktopCmd() *cobra.Command {
@@ -170,7 +173,7 @@ func newDesktopCmd() *cobra.Command {
 	}
 }
 
-func runDesktopServer(out io.Writer, in io.Reader) error {
+func newDesktopServer(out io.Writer) *desktopServer {
 	abs, err := filepath.Abs(vaultPath)
 	if err == nil {
 		vaultPath = filepath.Clean(abs)
@@ -182,15 +185,25 @@ func runDesktopServer(out io.Writer, in io.Reader) error {
 	_ = os.Chdir(filepath.Dir(vaultPath))
 
 	s := &desktopServer{
-		frames:     newFrameQueue(out),
 		vaultPath:  vaultPath,
 		diffs:      map[string][]src.VaultDiffChange{},
 		knownTx:    map[string]bool{},
 		touchAvail: -1,
 		touchConf:  -1,
 	}
+	if out != nil {
+		s.frames = newFrameQueue(out)
+	}
 	s.bridge = newDesktopBridge(s)
-	s.bridge.start()
+	s.icons = newIconService(iconCacheDir(), nil, func(hosts []string) {
+		s.emit("icons.updated", map[string]any{"hosts": hosts})
+	})
+	return s
+}
+
+func runDesktopServer(out io.Writer, in io.Reader) error {
+	s := newDesktopServer(out)
+	_ = s.bridge.start()
 	s.startWatcher()
 	go s.pollMCP()
 
@@ -291,6 +304,9 @@ func mapGoError(err error) *rpcError {
 }
 
 func (s *desktopServer) writeFrame(frame any) {
+	if s.frames == nil {
+		return
+	}
 	data, err := json.Marshal(frame)
 	if err != nil {
 		data, _ = json.Marshal(map[string]any{"event": "backend.error", "data": map[string]any{"message": err.Error()}})
@@ -299,6 +315,10 @@ func (s *desktopServer) writeFrame(frame any) {
 }
 
 func (s *desktopServer) emit(event string, data any) {
+	if s.sink != nil {
+		s.sink(event, data)
+		return
+	}
 	s.writeFrame(map[string]any{"event": event, "data": data})
 }
 
@@ -368,6 +388,7 @@ func (s *desktopServer) dropKey() {
 	s.password = ""
 	s.readonlyUntil = time.Time{}
 	s.diffs = map[string][]src.VaultDiffChange{}
+	s.transfers = nil
 	s.emailSetup = nil
 	if s.autoSync != nil {
 		s.autoSync.Stop()
@@ -574,6 +595,7 @@ var defaultDesktopSettings = map[string]any{
 	"confirmDelete":  true,
 	"showTypeIcons":  true,
 	"openOnLaunch":   "all",
+	"siteIcons":      "on",
 }
 
 func displayCipher(c string) string {
@@ -1291,7 +1313,10 @@ func (s *desktopServer) policiesView() []map[string]any {
 func (s *desktopServer) totpOrderView(refs []src.VaultItemRef) []string {
 	byKey := map[string]string{}
 	for _, r := range refs {
-		if r.Spec.ID == "totp" {
+		if !s.vault.HoldsTOTP(r) {
+			continue
+		}
+		if _, taken := byKey[s.vault.TOTPOrderKey(r)]; !taken || r.Spec.ID == "totp" {
 			byKey[s.vault.TOTPOrderKey(r)] = r.ID
 		}
 	}

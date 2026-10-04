@@ -679,7 +679,7 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error"}}}, nil
 		}
 
-		for _, e := range vault.TOTPEntries {
+		for _, e := range vault.AllTOTPs() {
 			if e.Account == args.Name {
 				code, _ := GenerateTOTP(e.Secret)
 				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("TOTP Code for %s: %s", args.Name, code)}}}, nil

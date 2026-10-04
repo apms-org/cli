@@ -91,6 +91,8 @@ The domain layer contains all business logic. It operates entirely in memory aft
 | Cloud Sync | `cloud.go`      | REST / OAuth2 / PAT | Multi-provider vault sync   |
 | MCP Server | `mcp.go`        | stdio (JSON-RPC)    | AI assistant vault access   |
 | Autofill   | `autofill/*.go` | HTTP (loopback)     | Windows keystroke injection |
+| Browser bridge | `desktop_bridge*.go`, `bridge_cmd.go` | HTTP (loopback) | Browser extension: fill, save, passkeys |
+| Website icons | `icons.go` | HTTPS to each site | Fetch and cache login logos |
 
 ### Cloud Provider Architecture
 

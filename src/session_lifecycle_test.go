@@ -2,6 +2,7 @@ package apm
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -76,5 +77,58 @@ func TestSessionInactivityLock(t *testing.T) {
 	}
 	if err.Error() != "session locked due to inactivity" && err.Error() != "no active session" {
 		t.Fatalf("expected inactivity-related error, got %v", err)
+	}
+}
+
+func TestSessionWithoutMaximum(t *testing.T) {
+	t.Setenv("APM_SESSION_ID", uniqueSessionID("nolimit"))
+	_ = KillSession()
+	defer KillSession()
+
+	if err := CreateSession("pass", 0, false, 0); err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+	sess, err := GetSession()
+	if err != nil {
+		t.Fatalf("a session with no maximum expired at once: %v", err)
+	}
+	if !sess.Expiry.IsZero() || sess.Expired(time.Now().Add(24*time.Hour)) {
+		t.Fatalf("expected no expiry, got %v", sess.Expiry)
+	}
+	if peek, err := PeekSession(); err != nil || peek == nil {
+		t.Fatalf("PeekSession: %v", err)
+	}
+}
+
+func TestSessionEndsAfterSleep(t *testing.T) {
+	if !SleepLockSupported() {
+		t.Skip("this platform cannot tell that the computer slept")
+	}
+	t.Setenv("APM_SESSION_ID", uniqueSessionID("sleep"))
+	_ = KillSession()
+	defer KillSession()
+
+	if err := CreateLockingSession("pass", time.Hour, false, 0, true); err != nil {
+		t.Fatalf("CreateLockingSession failed: %v", err)
+	}
+	if _, err := GetSession(); err != nil {
+		t.Fatalf("session ended without sleeping: %v", err)
+	}
+
+	// Pretend the session started before a sleep the computer has since woken from.
+	mark, _ := sleepMark()
+	sess := Session{MasterPassword: "pass", LastUsed: time.Now(), Expiry: time.Now().Add(time.Hour), LockOnSleep: true, SleepMark: mark - 100}
+	data, err := encryptSessionData(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(getSessionFile(), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PeekSession(); err == nil {
+		t.Fatal("PeekSession accepted a session from before a sleep")
+	}
+	if _, err := GetSession(); err == nil || err.Error() != "session locked because the computer slept" {
+		t.Fatalf("expected the sleep lock, got %v", err)
 	}
 }

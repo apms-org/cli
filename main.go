@@ -66,6 +66,10 @@ func init() {
 }
 
 func main() {
+	if origin, ok := nativeHostOrigin(os.Args[1:]); ok {
+		os.Exit(runNativeHost(origin))
+	}
+
 	var rootCmd = &cobra.Command{
 		Use:   "pm",
 		Short: "A simple password manager CLI",
@@ -862,13 +866,20 @@ func main() {
 			timeout, _ := cmd.Flags().GetDuration("timeout")
 			inactivity, _ := cmd.Flags().GetDuration("inactivity")
 
-			masterPassword, _, readonly, err := src_unlockVault()
+			masterPassword, vault, readonly, err := src_unlockVault()
 			if err != nil {
 				fmt.Println(err)
 				return
 			}
+			policy := lockPolicyOf(vault)
+			if cmd.Flags().Changed("timeout") {
+				policy.Max = timeout
+			}
+			if cmd.Flags().Changed("inactivity") {
+				policy.Idle = inactivity
+			}
 
-			err = src.CreateSession(masterPassword, timeout, readonly, inactivity)
+			err = policy.startSession(masterPassword, readonly)
 			if err != nil {
 				color.Red("Error creating session: %v\n", err)
 				src.KillSession()
@@ -877,11 +888,11 @@ func main() {
 				return
 			}
 			src.LogAction("VAULT_UNLOCKED", "Session updated")
-			color.Green("Vault session updated. Expires in %v or after %v of inactivity.\n", timeout, inactivity)
+			color.Green("%s", policy.unlockedLine())
 		},
 	}
-	unlockCmd.Flags().Duration("timeout", 1*time.Hour, "Session duration (e.g. 1h, 30m)")
-	unlockCmd.Flags().Duration("inactivity", 15*time.Minute, "Inactivity timeout (e.g. 15m, 5m)")
+	unlockCmd.Flags().Duration("timeout", 0, "Session duration, 0 for no limit (default: the vault's auto-lock, see pm autolock)")
+	unlockCmd.Flags().Duration("inactivity", 0, "Inactivity timeout, 0 for none (default: the vault's auto-lock, see pm autolock)")
 
 	var readonlyCmd = &cobra.Command{
 		Use:   "readonly <mins>",
@@ -1534,7 +1545,7 @@ func main() {
 					return
 				}
 				copyToClipboard(code)
-				color.Green("Copied TOTP for %s to clipboard.", target.Account)
+				color.Green("Copied TOTP for %s%s to clipboard.", target.Account, totpSiteSuffix(vault, target.Account))
 				src.LogAction("TOTP_COPIED", fmt.Sprintf("Account: %s", target.Account))
 				return
 			}
@@ -1543,103 +1554,8 @@ func main() {
 		},
 	}
 
-	var importCmd = &cobra.Command{
-		Use:   "import <file>",
-		Short: "Import data from JSON, CSV, or TXT file",
-		Args:  cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			filename := args[0]
-			encryptPass, _ := cmd.Flags().GetString("encrypt-pass")
-
-			masterPassword, vault, readonly, err := src_unlockVault()
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-			if readonly {
-				color.Red("Vault is READ-ONLY. Cannot import data.")
-				return
-			}
-
-			ext := strings.ToLower(filepath.Ext(filename))
-			if ext != "" {
-				ext = ext[1:]
-			}
-
-			var importErr error
-			switch ext {
-			case "json":
-				importErr = src.ImportFromJSON(vault, filename, encryptPass)
-			case "csv":
-				importErr = src.ImportFromCSV(vault, filename)
-			case "txt":
-				importErr = src.ImportFromTXT(vault, filename)
-			default:
-				fmt.Printf("Unsupported file extension: %s\n", ext)
-				return
-			}
-
-			if importErr != nil {
-				fmt.Printf("Error during import: %v\n", importErr)
-				return
-			}
-
-			data, err := src.EncryptVault(vault, masterPassword)
-			if err != nil {
-				fmt.Printf("Error encrypting vault: %v\n", err)
-				return
-			}
-			src.SaveVault(vaultPath, data)
-			color.Green("Successfully imported data from %s.\n", filename)
-			src.LogAction("DATA_IMPORTED", fmt.Sprintf("File: %s, Type: %s", filename, ext))
-		},
-	}
-	importCmd.Flags().StringP("encrypt-pass", "e", "", "Password for decryption")
-
-	var exportCmd = &cobra.Command{
-		Use:   "export",
-		Short: "Export vault data safely",
-		Run: func(cmd *cobra.Command, args []string) {
-			withoutPass, _ := cmd.Flags().GetBool("without-password")
-			output, _ := cmd.Flags().GetString("output")
-			encryptPass, _ := cmd.Flags().GetString("encrypt-pass")
-
-			_, vault, _, err := src_unlockVault()
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-
-			if output == "" {
-				output = "export.json"
-				if withoutPass {
-					output = "export.txt"
-				}
-			}
-
-			var exportErr error
-			ext := strings.ToLower(filepath.Ext(output))
-			if withoutPass || ext == ".txt" {
-				exportErr = src.ExportToTXT(vault, output, withoutPass)
-			} else if ext == ".csv" {
-				exportErr = src.ExportToCSV(vault, output)
-			} else {
-				exportErr = src.ExportToJSON(vault, output, encryptPass)
-			}
-
-			if exportErr != nil {
-				fmt.Printf("Error during export: %v\n", exportErr)
-				return
-			}
-
-			color.Green("Successfully exported vault data to %s.\n", output)
-			src.LogAction("DATA_EXPORTED", fmt.Sprintf("File: %s, Type: %s", output, ext))
-			src.SendAlert(vault, src.LevelAll, "DATA EXPORT", fmt.Sprintf("Vault data exported to %s", output))
-		},
-	}
-	exportCmd.Flags().StringP("output", "o", "", "Output filename")
-	exportCmd.Flags().StringP("encrypt-pass", "e", "", "Password for encryption")
-	exportCmd.Flags().Bool("without-password", false, "Exclude secrets")
+	importCmd := newImportCmd()
+	exportCmd := newExportCmd()
 
 	var cloudCmd = &cobra.Command{
 		Use:   "cloud",
@@ -3222,6 +3138,8 @@ func main() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(mcpCmd)
 	rootCmd.AddCommand(newDesktopCmd())
+	rootCmd.AddCommand(newBridgeCmd(), newExtensionCmd(), newAutolockCmd(), newPasskeysCmd())
+	totpCmd.AddCommand(newTOTPLinkCmd(), newTOTPUnlinkCmd())
 
 	rootCmd.PersistentFlags().StringVarP(&vaultPath, "vault", "v", vaultPath, "Vault file path")
 	rootCmd.Execute()
@@ -3791,9 +3709,10 @@ func src_unlockVault() (string, *src.Vault, bool, error) {
 			fmt.Println()
 
 			src.TrackFailure()
-			color.Cyan("vault has been unlocked. you will be asked to reauthenticate after 15 minutes of inactivity/1 hour.")
+			decoy := defaultLockPolicy()
+			color.Cyan(decoy.unlockedLine())
 
-			src.CreateSession(pass, 1*time.Hour, true, 15*time.Minute)
+			_ = decoy.startSession(pass, true)
 			return pass, src.GetDecoyVault(), true, nil
 		}
 
@@ -3802,7 +3721,7 @@ func src_unlockVault() (string, *src.Vault, bool, error) {
 		var usedTouchID bool
 
 		// Try Touch ID first if configured
-		if touchid.IsConfigured() {
+		if strings.TrimSpace(os.Getenv("APM_DESKTOP_NO_TOUCHID")) == "" && touchid.IsConfigured() {
 			if p, terr := touchid.GetPassword(); terr == nil {
 				pass = p
 				usedTouchID = true
@@ -3854,8 +3773,9 @@ func src_unlockVault() (string, *src.Vault, bool, error) {
 			updatedData, _ := src.EncryptVault(vault, pass)
 			src.SaveVault(vaultPath, updatedData)
 
-			src.CreateSession(pass, 1*time.Hour, false, 15*time.Minute)
-			color.Cyan("vault has been unlocked. you will be asked to reauthenticate after 15 minutes of inactivity/1 hour.")
+			policy := lockPolicyOf(vault)
+			_ = policy.startSession(pass, false)
+			color.Cyan(policy.unlockedLine())
 
 			return pass, vault, false, nil
 		}
@@ -3946,7 +3866,7 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 			return
 		}
 		if len(results) == 1 {
-			displayEntry(results[0], showPass, false)
+			displayEntry(v, results[0], showPass, false)
 		} else {
 			for i, r := range results {
 				fmt.Printf("[%d] %s (%s)\n", i+1, r.Identifier, r.Type)
@@ -4281,12 +4201,16 @@ func totpOrderKey(entry src.TOTPEntry) string {
 }
 
 func orderedTOTPEntries(v *src.Vault) []src.TOTPEntry {
-	if v == nil || len(v.TOTPEntries) == 0 {
+	if v == nil {
+		return nil
+	}
+	all := v.AllTOTPs()
+	if len(all) == 0 {
 		return nil
 	}
 	current := currentSpaceDisplay(v)
-	target := make([]src.TOTPEntry, 0, len(v.TOTPEntries))
-	for _, entry := range v.TOTPEntries {
+	target := make([]src.TOTPEntry, 0, len(all))
+	for _, entry := range all {
 		space := strings.TrimSpace(entry.Space)
 		if space == "" {
 			space = "default"
@@ -4390,7 +4314,7 @@ func runInteractiveTOTP(v *src.Vault, masterPassword string) {
 			if err != nil {
 				code = "INVALID"
 			}
-			fmt.Printf("[%d] %-24s : %s\n", i+1, entry.Account, code)
+			fmt.Printf("[%d] %-24s : %s%s\n", i+1, entry.Account, code, totpSiteSuffix(v, entry.Account))
 		}
 		return
 	}
@@ -4456,7 +4380,7 @@ func runInteractiveTOTP(v *src.Vault, masterPassword string) {
 			if i == selected {
 				marker = ">"
 			}
-			fmt.Printf("\r%s [%d] %-26s %s\r\n", marker, i+1, entry.Account, code)
+			fmt.Printf("\r%s [%d] %-26s %s%s\r\n", marker, i+1, entry.Account, code, totpSiteSuffix(v, entry.Account))
 		}
 
 		select {
@@ -4542,7 +4466,7 @@ func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, re
 
 	switch action {
 	case 'v':
-		displayEntry(res, showPass, true)
+		displayEntry(v, res, showPass, true)
 	case 'q':
 		displayQuicklook(res)
 	case 'i':
@@ -4908,19 +4832,22 @@ func editEntryInVault(v *src.Vault, mp string, res src.SearchResult) {
 			newPass = e.Password
 		}
 
-		if v.DeleteEntry(e.Account) {
-			v.AddEntry(newAcc, newUser, newPass)
-			updated = true
+		extra := promptLoginExtras(e)
+		if err := editLoginEntry(v, e, newAcc, newUser, newPass, extra); err != nil {
+			color.Red("Error: %v", err)
+			return
 		}
+		updated = true
 	case "TOTP":
 		e := res.Data.(src.TOTPEntry)
 		newAcc := prompt("New Account", e.Account)
 		newSec := prompt("New Secret", e.Secret)
 
-		if v.DeleteTOTPEntry(e.Account) {
-			v.AddTOTPEntry(newAcc, newSec)
-			updated = true
+		if err := editTOTPEntry(v, e, newAcc, newSec); err != nil {
+			color.Red("Error: %v", err)
+			return
 		}
+		updated = true
 	case "Token":
 		e := res.Data.(src.TokenEntry)
 		newName := prompt("New Name", e.Name)
@@ -5190,7 +5117,7 @@ func editEntryInVault(v *src.Vault, mp string, res src.SearchResult) {
 	}
 }
 
-func displayEntry(res src.SearchResult, showPass, promptCopy bool) {
+func displayEntry(v *src.Vault, res src.SearchResult, showPass, promptCopy bool) {
 	showField := func(label, value string) {
 		if showPass {
 			fmt.Printf("%s: %s\n", label, value)
@@ -5218,6 +5145,33 @@ func displayEntry(res src.SearchResult, showPass, promptCopy bool) {
 		e := res.Data.(src.Entry)
 		fmt.Printf("Type: Password\nAccount: %s\nUser: %s\n", e.Account, e.Username)
 		showField("Password", e.Password)
+		if e.Website != "" {
+			fmt.Printf("Website: %s\n", e.Website)
+		}
+		if len(e.URLs) > 0 {
+			fmt.Printf("Other websites: %s\n", strings.Join(e.URLs, ", "))
+		}
+		if e.TOTP != "" {
+			code, err := src.GenerateTOTP(e.TOTP)
+			if err != nil {
+				code = "INVALID SECRET"
+			}
+			showField("2FA code", code)
+		}
+		for _, cf := range e.Fields {
+			label := cf.Label
+			if label == "" {
+				label = "Field"
+			}
+			if cf.Hidden {
+				showField(label, cf.Value)
+			} else {
+				fmt.Printf("%s: %s\n", label, cf.Value)
+			}
+		}
+		for _, line := range loginExtraLines(v, e) {
+			fmt.Println(line)
+		}
 	case "TOTP":
 		t := res.Data.(src.TOTPEntry)
 		code, err := src.GenerateTOTP(t.Secret)
@@ -5225,6 +5179,11 @@ func displayEntry(res src.SearchResult, showPass, promptCopy bool) {
 			code = "INVALID SECRET"
 		}
 		fmt.Printf("Type: TOTP\nAccount: %s\n", t.Account)
+		if v != nil {
+			if sites := totpDomainsFor(v, t.Account); len(sites) > 0 {
+				fmt.Printf("Linked site: %s\n", strings.Join(sites, ", "))
+			}
+		}
 		showField("Code", code)
 	case "Token":
 		tok := res.Data.(src.TokenEntry)

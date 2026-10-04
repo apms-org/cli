@@ -42,6 +42,13 @@ This page lists the capabilities that are implemented in the current codebase.
 - Provider diff and selective merge flow
 - Provider-specific `.apmignore` filtering before upload
 
+## Browser extension
+
+- Loopback bridge on `127.0.0.1:41417`, served by the desktop app or `pm bridge serve`, with pairing; with `pm extension link`, the browser starts `pm` itself when the app is closed
+- Fill logins and one-time codes, save new logins, and create and use passkeys stored in the vault
+- Several websites per login (`website` plus `urls`), with "Fill and remember" to add the current site
+- Website logos fetched only from each site itself and cached locally, with a `siteIcons` switch
+
 ## AI access
 
 - Built-in MCP server with permission-scoped tokens
