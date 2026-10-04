@@ -27,6 +27,7 @@ func init() {
 		"vault.status":              {fn: hVaultStatus},
 		"vault.unlock":              {fn: hVaultUnlock},
 		"vault.unlockTouchID":       {fn: hVaultUnlockTouchID, long: true},
+		"touchid.reply":             {fn: hTouchIDReply, long: true},
 		"vault.unlockSession":       {fn: hVaultUnlockSession},
 		"vault.lock":                {fn: hVaultLock},
 		"vault.readonly":            {fn: hVaultReadonly},
@@ -284,6 +285,13 @@ func hVaultUnlock(s *desktopServer, p json.RawMessage) (any, error) {
 }
 
 func hVaultUnlockTouchID(s *desktopServer, p json.RawMessage) (any, error) {
+	return s.unlockWithTouchID("unlock your vault", true)
+}
+
+// unlockWithTouchID checks the fingerprint, then opens the vault with the
+// master password kept in the Keychain. inline runs the check on the app's
+// lock screen instead of a system dialog.
+func (s *desktopServer) unlockWithTouchID(reason string, inline bool) (any, error) {
 	s.mu.Lock()
 	if err := s.guardAttempt(); err != nil {
 		s.mu.Unlock()
@@ -298,11 +306,11 @@ func hVaultUnlockTouchID(s *desktopServer, p json.RawMessage) (any, error) {
 	if !conf {
 		return nil, rpcErr("touchid_unavailable", "Touch ID is not set up for APM.")
 	}
-	pass, err := touchid.GetPassword()
+	if err := s.verifyTouchID(reason, inline); err != nil {
+		return nil, err
+	}
+	pass, err := touchid.ReadPassword()
 	if err != nil {
-		if errors.Is(err, touchid.ErrAuthFailed) {
-			return nil, rpcErr("touchid_failed", "Touch ID was cancelled or did not match.")
-		}
 		return nil, rpcErr("touchid_failed", "Touch ID failed: "+err.Error())
 	}
 	s.mu.Lock()
@@ -466,7 +474,7 @@ func hVaultSetup(s *desktopServer, p json.RawMessage) (any, error) {
 	if in.TouchID {
 		if !s.touchIDAvailable() {
 			result["touchIdError"] = "Touch ID is not available on this Mac."
-		} else if terr := touchid.Setup(in.Password); terr != nil {
+		} else if terr := storeTouchID(in.Password); terr != nil {
 			result["touchIdError"] = terr.Error()
 		} else {
 			s.touchConf = 1
@@ -1667,7 +1675,7 @@ func hChangePassword(s *desktopServer, p json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if touch {
-		if terr := touchid.Setup(next); terr != nil {
+		if terr := storeTouchID(next); terr != nil {
 			res["touchIdError"] = "Touch ID was not updated: " + terr.Error()
 		} else {
 			res["touchIdUpdated"] = true
@@ -1710,6 +1718,16 @@ func hSecurityProfile(s *desktopServer, p json.RawMessage) (any, error) {
 	return s.withSnapshot(nil), nil
 }
 
+// storeTouchID saves the master password for Touch ID. Every caller has just
+// confirmed the master password, so under the desktop app there is no
+// fingerprint prompt on top; on its own pm keeps the CLI's prompt.
+func storeTouchID(password string) error {
+	if touchIDByApp() {
+		return touchid.Store(password)
+	}
+	return touchid.Setup(password)
+}
+
 func hSecurityTouchID(s *desktopServer, p json.RawMessage) (any, error) {
 	var in struct {
 		On       bool   `json:"on"`
@@ -1735,7 +1753,9 @@ func hSecurityTouchID(s *desktopServer, p json.RawMessage) (any, error) {
 	s.mu.Unlock()
 	var err error
 	if in.On {
-		err = touchid.Setup(pass)
+		err = storeTouchID(pass)
+	} else if touchIDByApp() {
+		err = touchid.Delete()
 	} else {
 		err = touchid.Remove()
 	}
@@ -2392,7 +2412,7 @@ func hRecoverReset(s *desktopServer, p json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if touch {
-		if terr := touchid.Setup(in.Password); terr != nil {
+		if terr := storeTouchID(in.Password); terr != nil {
 			res["touchIdError"] = "Touch ID was not updated: " + terr.Error()
 		}
 	}

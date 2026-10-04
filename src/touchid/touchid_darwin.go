@@ -115,7 +115,12 @@ func Setup(masterPassword string) error {
 	if !ok {
 		return ErrAuthFailed
 	}
+	return Store(masterPassword)
+}
 
+// Store writes the master password to the login keychain without a Touch ID
+// prompt. The desktop app calls it once the master password is confirmed.
+func Store(masterPassword string) error {
 	cmd := exec.Command("security", "add-generic-password",
 		"-s", KeychainService,
 		"-a", KeychainAccount,
@@ -138,7 +143,13 @@ func GetPassword() (string, error) {
 	if !ok {
 		return "", ErrAuthFailed
 	}
+	return ReadPassword()
+}
 
+// ReadPassword reads the master password from the login keychain without a
+// Touch ID prompt. The desktop app calls it after checking the fingerprint
+// itself.
+func ReadPassword() (string, error) {
 	cmd := exec.Command("security", "find-generic-password",
 		"-s", KeychainService,
 		"-a", KeychainAccount,
@@ -160,7 +171,12 @@ func Remove() error {
 	if !ok {
 		return ErrAuthFailed
 	}
+	return Delete()
+}
 
+// Delete removes the stored master password from the login keychain without
+// a Touch ID prompt.
+func Delete() error {
 	cmd := exec.Command("security", "delete-generic-password",
 		"-s", KeychainService,
 		"-a", KeychainAccount,

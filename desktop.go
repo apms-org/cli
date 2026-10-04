@@ -147,6 +147,9 @@ type desktopServer struct {
 	knownTx       map[string]bool
 	touchAvail    int
 	touchConf     int
+	touchMu       sync.Mutex
+	touchSeq      int64
+	touchWait     map[int64]chan touchReply
 	autoSync      *time.Timer
 	watchTimer    *time.Timer
 	bridge        *desktopBridge
@@ -190,6 +193,7 @@ func newDesktopServer(out io.Writer) *desktopServer {
 		knownTx:    map[string]bool{},
 		touchAvail: -1,
 		touchConf:  -1,
+		touchWait:  map[int64]chan touchReply{},
 	}
 	if out != nil {
 		s.frames = newFrameQueue(out)
@@ -490,6 +494,91 @@ func (s *desktopServer) touchIDConfigured() bool {
 		}
 	}
 	return s.touchConf == 1
+}
+
+// touchPromptTimeout bounds how long pm waits for the app to answer a
+// touchid.prompt. The lock screen keeps Touch ID armed while it has focus, so
+// this is long.
+const touchPromptTimeout = 30 * time.Minute
+
+type touchReply struct {
+	OK      bool   `json:"ok"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// touchIDByApp reports whether the desktop app checks fingerprints itself.
+// The app sets APM_DESKTOP_TOUCHID=app; anything else (pm desktop on its own,
+// the web bridge) uses osascript the way the CLI does.
+func touchIDByApp() bool {
+	return os.Getenv("APM_DESKTOP_TOUCHID") == "app"
+}
+
+// verifyTouchID asks for a fingerprint. Under the desktop app pm emits
+// touchid.prompt and waits for touchid.reply, so macOS attributes the check to
+// APM rather than osascript. inline asks the app to run it in the lock screen
+// itself, with no system dialog. Callers must not hold s.mu.
+func (s *desktopServer) verifyTouchID(reason string, inline bool) error {
+	if !touchIDByApp() {
+		if err := touchid.Authenticate(reason); err != nil {
+			if errors.Is(err, touchid.ErrAuthFailed) {
+				return rpcErr("touchid_failed", "Touch ID was cancelled or did not match.")
+			}
+			return rpcErr("touchid_failed", "Touch ID failed: "+err.Error())
+		}
+		return nil
+	}
+	ch := make(chan touchReply, 1)
+	s.touchMu.Lock()
+	s.touchSeq++
+	id := s.touchSeq
+	s.touchWait[id] = ch
+	s.touchMu.Unlock()
+	defer func() {
+		s.touchMu.Lock()
+		delete(s.touchWait, id)
+		s.touchMu.Unlock()
+	}()
+	s.emit("touchid.prompt", map[string]any{"id": id, "reason": reason, "inline": inline})
+	var r touchReply
+	select {
+	case r = <-ch:
+	case <-time.After(touchPromptTimeout):
+		s.emit("touchid.cancel", map[string]any{"id": id})
+		r = touchReply{Code: "cancelled"}
+	}
+	if r.OK {
+		return nil
+	}
+	switch r.Code {
+	case "cancelled":
+		return rpcErr("touchid_cancelled", "Touch ID was cancelled.")
+	case "lockout":
+		return rpcErr("touchid_locked", "Touch ID is locked after too many tries. Unlock with your master password.")
+	case "unavailable":
+		return rpcErr("touchid_unavailable", "Touch ID is not available on this Mac.")
+	}
+	return rpcErr("touchid_failed", "Touch ID did not recognise that fingerprint.")
+}
+
+// hTouchIDReply answers a pending touchid.prompt. Electron's main process sends
+// it and refuses to forward it from the renderer.
+func hTouchIDReply(s *desktopServer, p json.RawMessage) (any, error) {
+	var in struct {
+		ID int64 `json:"id"`
+		touchReply
+	}
+	if err := decodeParams(p, &in); err != nil {
+		return nil, err
+	}
+	s.touchMu.Lock()
+	ch := s.touchWait[in.ID]
+	delete(s.touchWait, in.ID)
+	s.touchMu.Unlock()
+	if ch != nil {
+		ch <- in.touchReply
+	}
+	return map[string]any{"ok": true}, nil
 }
 
 func (s *desktopServer) startWatcher() {

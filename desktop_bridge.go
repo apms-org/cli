@@ -848,7 +848,7 @@ func bridgeUnlock(b *desktopBridge, c *bridgeCtx) (map[string]any, error) {
 
 func bridgeUnlockTouchID(b *desktopBridge, c *bridgeCtx) (map[string]any, error) {
 	s := b.s
-	res, err := hVaultUnlockTouchID(s, nil)
+	res, err := s.unlockWithTouchID("unlock your vault for the browser extension", false)
 	if err != nil {
 		return nil, err
 	}

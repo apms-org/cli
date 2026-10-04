@@ -17,6 +17,15 @@ func GetPassword() (string, error) { return "", ErrNotAvailable }
 // Remove returns ErrNotAvailable on non-macOS platforms.
 func Remove() error { return ErrNotAvailable }
 
+// Store returns ErrNotAvailable on non-macOS platforms.
+func Store(masterPassword string) error { return ErrNotAvailable }
+
+// ReadPassword returns ErrNotAvailable on non-macOS platforms.
+func ReadPassword() (string, error) { return "", ErrNotAvailable }
+
+// Delete returns ErrNotAvailable on non-macOS platforms.
+func Delete() error { return ErrNotAvailable }
+
 // Status returns a status map indicating Touch ID is not available.
 func Status() map[string]interface{} {
 	return map[string]interface{}{
