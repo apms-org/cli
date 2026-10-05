@@ -238,7 +238,7 @@ func linkedManifest(b nativeBrowser) (map[string]any, bool) {
 	return m, true
 }
 
-// appBridgeRunning reports whether the desktop app or pm bridge serve is
+// appBridgeRunning reports whether the desktop app or pm extension serve is
 // already answering on the loopback port.
 func appBridgeRunning() (string, bool) {
 	client := &http.Client{Timeout: 800 * time.Millisecond}
@@ -260,11 +260,11 @@ func appBridgeRunning() (string, bool) {
 func newExtensionCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "extension",
-		Short: "Link the APM browser extension so it works without the desktop app",
-		Long: "The APM browser extension fills from your vault through the desktop app. Link it once with 'pm extension link' and the browser starts pm on its own whenever the app is closed.\n\n" +
-			"pm only ever answers the APM extension, and only after you confirm the code it shows.",
+		Short: "Connect the APM browser extension to your vault without the desktop app",
+		Long: "The APM browser extension fills from your vault through the desktop app. Link it once with 'pm extension link' and the browser starts pm on its own whenever the app is closed. A linked pm only ever answers the APM extension, and only after you confirm the code it shows.\n\n" +
+			"'pm extension serve' serves the extension from a terminal instead. 'pm extension token' and 'pm extension rotate' manage the pairing token the app, serve and a linked pm share.",
 	}
-	root.AddCommand(newExtensionLinkCmd(), newExtensionUnlinkCmd(), newExtensionStatusCmd(), newExtensionHostCmd())
+	root.AddCommand(newExtensionLinkCmd(), newExtensionUnlinkCmd(), newExtensionStatusCmd(), newExtensionServeCmd(), newExtensionTokenCmd(), newExtensionRotateCmd(), newExtensionHostCmd())
 	return root
 }
 
@@ -350,7 +350,7 @@ func runExtensionLink(only, extraIDs []string, noWait bool) int {
 
 	if mode, ok := appBridgeRunning(); ok {
 		if mode == "serve" {
-			fmt.Println("\n'pm bridge serve' is running, so the extension uses it for now. Stop it and the browser starts pm on its own.")
+			fmt.Println("\n'pm extension serve' is running, so the extension uses it for now. Stop it and the browser starts pm on its own.")
 		} else {
 			fmt.Println("\nThe APM app is running, so the extension uses it for now. Close the app and the browser starts pm on its own.")
 		}
@@ -566,23 +566,36 @@ func newExtensionUnlinkCmd() *cobra.Command {
 			}
 			src.LogAction("EXTENSION_UNLINKED", strings.Join(names, ", "))
 			color.Green("Unlinked %s.", joinNames(names))
-			fmt.Println("The extension works only while the APM app is open. Its pairing is kept; run 'pm bridge rotate' to revoke it.")
+			fmt.Println("The extension works only while the APM app is open. Its pairing is kept; run 'pm extension rotate' to revoke it.")
 		},
 	}
 }
 
 func newExtensionStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var port int
+	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show which browsers can start pm for the extension",
+		Short: "Show linked browsers, the running bridge and the pairing token",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			os.Exit(runExtensionStatus())
+			os.Exit(runExtensionStatus(port))
 		},
 	}
+	cmd.Flags().IntVar(&port, "port", 0, "Port to probe (default 41417, or APM_BRIDGE_PORT)")
+	return cmd
 }
 
-func runExtensionStatus() int {
+func statusLine(label, value string) {
+	fmt.Printf("%-16s %s\n", label+":", value)
+}
+
+// runExtensionStatus exits 1 when the extension has no way to reach pm (no
+// bridge listening and no browser linked) or the running bridge rejects the
+// local pairing token.
+func runExtensionStatus(port int) int {
+	if port <= 0 {
+		port = bridgePortFromEnv()
+	}
 	binary, _ := nativeHostBinary()
 	type row struct{ name, state string }
 	var rows []row
@@ -612,24 +625,93 @@ func runExtensionStatus() int {
 		fmt.Println("No Chromium browser found.")
 	}
 	for _, r := range rows {
-		fmt.Printf("%-16s %s\n", r.name+":", r.state)
+		statusLine(r.name, r.state)
 	}
 	if c, ok := readNativeHostConfig(); ok {
-		fmt.Printf("%-16s %s\n", "Vault:", c.Vault)
-		fmt.Printf("%-16s %s\n", "Linked:", time.UnixMilli(c.Linked).Format("Jan 2, 2006 15:04"))
+		statusLine("Linked vault", c.Vault)
+		statusLine("Linked on", time.UnixMilli(c.Linked).Format("Jan 2, 2006 15:04"))
 	}
-	if mode, ok := appBridgeRunning(); ok {
-		if mode == "serve" {
-			fmt.Printf("%-16s %s\n", "Right now:", "the extension uses 'pm bridge serve'")
-		} else {
-			fmt.Printf("%-16s %s\n", "Right now:", "the extension uses the APM app")
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	client := &http.Client{Timeout: 3 * time.Second}
+	var info struct {
+		Name     string `json:"name"`
+		Mode     string `json:"mode"`
+		Version  string `json:"version"`
+		API      int    `json:"api"`
+		Unlocked bool   `json:"unlocked"`
+	}
+	listening := false
+	if resp, err := client.Get(base + "/api/info"); err == nil {
+		err = json.NewDecoder(resp.Body).Decode(&info)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != 200 || info.Name != "APM" {
+			statusLine("Right now", fmt.Sprintf("something other than APM is listening on 127.0.0.1:%d", port))
+			return 1
 		}
-	} else if linked > 0 {
-		fmt.Printf("%-16s %s\n", "Right now:", "the APM app is closed, so the browser starts pm")
+		listening = true
 	}
-	if linked == 0 {
+	token, _, haveToken := readBridgeToken(bridgeTokenFile())
+	switch {
+	case listening && info.Mode == "serve":
+		statusLine("Right now", "the extension uses 'pm extension serve'")
+	case listening:
+		statusLine("Right now", "the extension uses the APM app")
+	case linked > 0:
+		statusLine("Right now", "the APM app is closed, so the browser starts pm")
+	default:
+		statusLine("Right now", fmt.Sprintf("nothing is listening on 127.0.0.1:%d and no browser is linked", port))
 		fmt.Println("\nRun 'pm extension link' to use the extension without the APM app.")
+		return 1
 	}
+	if !listening {
+		if haveToken {
+			statusLine("Token", bridgeTokenFingerprint(token)+" (fingerprint)")
+		}
+		return 0
+	}
+
+	statusLine("Listening", fmt.Sprintf("127.0.0.1:%d", port))
+	statusLine("Version", fmt.Sprintf("%s (bridge API %d)", info.Version, info.API))
+	vaultState := "locked"
+	if info.Unlocked {
+		vaultState = "unlocked"
+	}
+	if !haveToken {
+		statusLine("Vault", vaultState)
+		statusLine("Token", "none yet. Run 'pm extension token' to create one.")
+		return 0
+	}
+	req, _ := http.NewRequest("GET", base+"/api/status", nil)
+	req.Header.Set("x-apm-token", token)
+	req.Header.Set("x-apm-client", "pm extension status")
+	sresp, err := client.Do(req)
+	if err != nil {
+		statusLine("Vault", vaultState)
+		statusLine("Token", fmt.Sprintf("%s (the status request failed: %v)", bridgeTokenFingerprint(token), err))
+		return 1
+	}
+	defer sresp.Body.Close()
+	if sresp.StatusCode == http.StatusUnauthorized {
+		statusLine("Vault", vaultState)
+		statusLine("Token", bridgeTokenFingerprint(token)+" does not match the running bridge. It may use a different config directory.")
+		return 1
+	}
+	var st struct {
+		Unlocked bool `json:"unlocked"`
+		Readonly bool `json:"readonly"`
+		Items    int  `json:"items"`
+	}
+	_ = json.NewDecoder(sresp.Body).Decode(&st)
+	switch {
+	case st.Unlocked && st.Readonly:
+		statusLine("Vault", fmt.Sprintf("unlocked, read-only, %d items", st.Items))
+	case st.Unlocked:
+		statusLine("Vault", fmt.Sprintf("unlocked, %d items", st.Items))
+	default:
+		statusLine("Vault", "locked")
+	}
+	statusLine("Token", bridgeTokenFingerprint(token)+" (fingerprint)")
 	return 0
 }
 

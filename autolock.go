@@ -8,11 +8,11 @@ import (
 )
 
 // autoLocker applies the vault's auto-lock policy to a bridge that runs
-// without the desktop app: pm bridge serve and the native messaging host. The
+// without the desktop app: pm extension serve and the native messaging host. The
 // app applies the same policy in its own window.
 type autoLocker struct {
 	s *desktopServer
-	// idle, when set, overrides the policy's inactivity limit (pm bridge serve
+	// idle, when set, overrides the policy's inactivity limit (pm extension serve
 	// --idle). Zero turns idle locking off.
 	idle       *time.Duration
 	mu         sync.Mutex

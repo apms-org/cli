@@ -121,22 +121,23 @@ Notes:
 ### Browser extension
 
 - `pm extension link [--browser chrome,edge] [--id <extension id>] [--no-wait]`
-- `pm extension status`
 - `pm extension unlink`
-- `pm bridge serve [--port N] [--locked] [--idle 15m]`
-- `pm bridge status [--port N]`
-- `pm bridge token [--show]`
-- `pm bridge rotate`
+- `pm extension status [--port N]`
+- `pm extension serve [--port N] [--locked] [--idle 15m]`
+- `pm extension token [--show]`
+- `pm extension rotate`
 - `pm totp link <entry> <domain>`
 - `pm totp unlink <entry> [domain]`
 
-`pm extension link` lets the extension work without the desktop app. It registers `pm` as a native messaging host (`dev.apm.bridge`) with every Chromium browser it finds (Chrome, Edge, Brave, Arc, Vivaldi, Chromium), allowed only for the APM extension, then waits in the terminal. If the extension is not paired yet it shows a code; check that the terminal shows the same one and answer `y`. You do this once. From then on, whenever the app is closed, the browser starts `pm` on its own and the extension sends the same requests over stdio. `pm` holds the key only while it runs, locks on the vault's auto-lock policy, and exits when the browser closes. While the app is running, the extension uses the app. `pm extension unlink` removes the registration; `pm bridge rotate` revokes the pairing.
+`pm extension link` lets the extension work without the desktop app. It registers `pm` as a native messaging host (`dev.apm.bridge`) with every Chromium browser it finds (Chrome, Edge, Brave, Arc, Vivaldi, Chromium), allowed only for the APM extension, then waits in the terminal. If the extension is not paired yet it shows a code; check that the terminal shows the same one and answer `y`. You do this once. From then on, whenever the app is closed, the browser starts `pm` on its own and the extension sends the same requests over stdio. `pm` holds the key only while it runs, locks on the vault's auto-lock policy, and exits when the browser closes. While the app is running, the extension uses the app. `pm extension unlink` removes the registration; `pm extension rotate` revokes the pairing.
 
-`pm bridge serve` serves the same loopback API as the desktop app, for CLI-only use. Pair a browser by approving the code it shows, or paste the token from `pm bridge token --show`. It locks on the vault's auto-lock policy unless you pass `--idle`.
+`pm extension serve` serves the same loopback API as the desktop app from a terminal, until Ctrl+C, instead of linking. Pair a browser by approving the code it shows, or paste the token from `pm extension token --show`. It locks on the vault's auto-lock policy unless you pass `--idle`.
+
+`pm extension status` shows which browsers are linked, what is serving the extension right now (the app, `pm extension serve`, or the browser-started `pm`), the vault's lock state and item count, and the pairing token's fingerprint. It exits 1 when the extension has no way to reach `pm`, when something other than APM holds the port, or when the token does not match the running bridge.
 
 A login can hold several websites: `website` plus `urls` ("Other websites" in the desktop app). The extension offers the login on any of them, and can add the site you are on to a login.
 
-While the vault is unlocked, the desktop app and `pm bridge serve` fetch each login's logo from the site itself (never from a third-party service) and cache it under `icons/` in the APM config directory. Turn this off with the `siteIcons` vault setting ("Show website icons" in the desktop app), or set `APM_ICONS_OFFLINE=1`. See [Storage](storage.md#browser-bridge-and-website-icons) for the cache layout.
+While the vault is unlocked, the desktop app and `pm extension serve` fetch each login's logo from the site itself (never from a third-party service) and cache it under `icons/` in the APM config directory. Turn this off with the `siteIcons` vault setting ("Show website icons" in the desktop app), or set `APM_ICONS_OFFLINE=1`. See [Storage](storage.md#browser-bridge-and-website-icons) for the cache layout.
 
 ### MCP
 

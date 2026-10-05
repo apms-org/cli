@@ -3172,7 +3172,7 @@ func main() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(mcpCmd)
 	rootCmd.AddCommand(newDesktopCmd())
-	rootCmd.AddCommand(newBridgeCmd(), newExtensionCmd(), newAutolockCmd())
+	rootCmd.AddCommand(newExtensionCmd(), newAutolockCmd())
 	totpCmd.AddCommand(newTOTPLinkCmd(), newTOTPUnlinkCmd())
 
 	rootCmd.PersistentFlags().StringVarP(&vaultPath, "vault", "v", vaultPath, "Vault file path")

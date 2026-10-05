@@ -95,14 +95,14 @@ Affects telemetry recording (e.g., `last_accessor` field in secret telemetry).
 
 ### `APM_BRIDGE_PORT`
 
-Moves the extension bridge off `127.0.0.1:41417`. The desktop app, `pm bridge serve` and `pm bridge status` all read it; `--port` overrides it for the two commands.
+Moves the extension bridge off `127.0.0.1:41417`. The desktop app, `pm extension serve` and `pm extension status` all read it; `--port` overrides it for the two commands.
 
 ### `APM_ICONS_OFFLINE`
 
 Turns off website logo fetching for the process, whatever the `siteIcons` vault setting says. Use it in tests and CI so nothing reaches the network:
 
 ```bash
-APM_ICONS_OFFLINE=1 pm bridge serve
+APM_ICONS_OFFLINE=1 pm extension serve
 ```
 
 Any value other than `0`, `false` or `off` turns it on.

@@ -157,35 +157,39 @@ pm policy load ./policies/
 
 The APM browser extension fills logins, offers one-time codes on the sites they belong to, saves new logins, and creates and uses passkeys. It never sees your master password or a passkey's private key. It talks to a small bridge that APM serves on your own machine at `127.0.0.1:41417` (set `APM_BRIDGE_PORT` to use another port).
 
-**Two ways to run the bridge**
+**Three ways to reach the vault**
 
 - With the desktop app: the bridge runs while the app is open. Pairing requests and browser unlocks show up in the app.
-- With the CLI only: run `pm bridge serve` in a terminal and leave it open. It serves the same API the desktop app serves.
+- With the CLI only, linked (recommended): run `pm extension link` once. It registers `pm` as a native messaging host with each Chromium browser (Chrome, Edge, Brave, Arc, Vivaldi, Chromium), and from then on the browser starts `pm` on its own whenever the app is closed.
+- With the CLI only, from a terminal: run `pm extension serve` and leave it open. It serves the same API the desktop app serves, and shows each unlock, lock and pairing request as it happens.
 
 ```sh
-pm bridge serve              # unlocks with your CLI session, or asks for the master password
-pm bridge serve --locked     # starts locked; unlock from the extension
-pm bridge serve --idle 5m    # locks after 5 minutes without browser activity (default 15m, 0 turns it off)
+pm extension link               # once per computer; confirm the code the extension shows
+pm extension serve              # unlocks with your CLI session, or asks for the master password
+pm extension serve --locked     # starts locked; unlock from the extension
+pm extension serve --idle 5m    # locks after 5 minutes without browser activity (default 15m, 0 turns it off)
 ```
 
-`pm bridge serve` prints a line when the vault is unlocked or locked. Press Ctrl+C to stop it; the vault key is dropped from memory. If the port is taken, it exits and tells you the APM app may already be serving the extension.
+`pm extension serve` prints a line when the vault is unlocked or locked. Press Ctrl+C to stop it; the vault key is dropped from memory. If the port is taken, it exits and tells you the APM app may already be serving the extension.
 
 **Pairing a browser**
 
 1. In the extension, choose Connect. The extension shows a 6 character code, for example `K7M-2QX`.
-2. Check that APM shows the same code: the desktop app opens a dialog, and `pm bridge serve` asks `Connect Chrome on macOS? Code K7M-2QX [y/N]`.
+2. Check that APM shows the same code: the desktop app opens a dialog, and `pm extension link` or `pm extension serve` asks in the terminal, for example `Connect Chrome on macOS? Code K7M-2QX [y/N]`.
 3. Approve it. The extension receives its token and is paired.
 
-A request expires after 2 minutes, and only one can wait at a time. `pm bridge serve` denies requests on its own when it is not running in a terminal. To pair by hand instead, run `pm bridge token --show` and paste the token into the extension's manual pairing field.
+A request expires after 2 minutes, and only one can wait at a time. `pm extension serve` denies requests on its own when it is not running in a terminal. To pair by hand instead, run `pm extension token --show` and paste the token into the extension's manual pairing field.
 
 **Commands**
 
 | Command | What it does |
 |---------|--------------|
-| `pm bridge serve [--port N] [--locked] [--idle 15m]` | Serve the extension bridge without the desktop app |
-| `pm bridge status [--port N]` | Show whether a bridge is listening, its version, lock state, item count and token fingerprint |
-| `pm bridge token [--show]` | Print the pairing token, masked unless `--show` is given |
-| `pm bridge rotate` | Replace the pairing token. Every paired browser must pair again. A running bridge picks up the new token on its next request |
+| `pm extension link [--browser chrome,edge] [--no-wait]` | Let the browser start `pm` for the extension when the desktop app is closed |
+| `pm extension unlink` | Stop browsers from starting `pm`. The pairing is kept |
+| `pm extension status [--port N]` | Show which browsers are linked, what is serving the extension right now, the vault's lock state and item count, and the token fingerprint |
+| `pm extension serve [--port N] [--locked] [--idle 15m]` | Serve the extension from this terminal until Ctrl+C |
+| `pm extension token [--show]` | Print the pairing token, masked unless `--show` is given |
+| `pm extension rotate` | Replace the pairing token. Every paired browser must pair again. A running bridge picks up the new token on its next request |
 | `pm totp link <entry> <domain>` | Link a one-time code to a site so the extension offers it there |
 | `pm totp unlink <entry> [domain]` | Remove a one-time code's site links |
 
@@ -213,10 +217,10 @@ The desktop app and the extension show each login's own logo instead of its firs
 
 - What: the host of the login's first website (a one-time code uses its linked site), lowercased and without `www.` or a port. `localhost`, IP addresses, `.local`, `.internal` and names without a dot are never fetched.
 - How: APM loads `https://<host>/` (at most 512 KiB), picks the best icon the page declares (`apple-touch-icon`, then the largest PNG, then SVG), and falls back to `https://<host>/favicon.ico`. HTTPS only, at most 3 redirects, 6 seconds per site, images up to 256 KiB, no cookies. Addresses that resolve to loopback, private, link-local or CGNAT ranges are refused. Requests go straight to the site, not through a system proxy.
-- When: only while the vault is unlocked and the desktop app or `pm bridge serve` is running, at most 4 sites at a time. A failed site is retried after 3 days; a logo is refreshed after 30 days.
+- When: only while the vault is unlocked and the desktop app or `pm extension serve` is running, at most 4 sites at a time. A failed site is retried after 3 days; a logo is refreshed after 30 days.
 - Where: `icons/` in your APM config directory (`~/Library/Application Support/apm/icons` on macOS, `~/.config/apm/icons` on Linux, `%AppData%\apm\icons` on Windows). Each file is named by the SHA-256 of its host, and at most 2000 are kept. The cache is not encrypted: each `.json` file next to an image names its host, so anyone who can read your config directory can see which sites have logos.
 - What the site learns: your IP address and that APM asked for its icon (the user agent is `APM/<version> (+icon)`). Nothing about your account.
-- Turning it off: in the desktop app, Settings, Appearance, turn off "Show website icons" (the vault setting `siteIcons`, which `pm bridge serve` honors too), and choose "Clear icon cache" to delete the cache. Set `APM_ICONS_OFFLINE=1` to stop every fetch from a process, for example in tests or CI. Cached logos are still shown until you clear them.
+- Turning it off: in the desktop app, Settings, Appearance, turn off "Show website icons" (the vault setting `siteIcons`, which `pm extension serve` honors too), and choose "Clear icon cache" to delete the cache. Set `APM_ICONS_OFFLINE=1` to stop every fetch from a process, for example in tests or CI. Cached logos are still shown until you clear them.
 
 ---
 

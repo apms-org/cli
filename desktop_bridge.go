@@ -89,7 +89,7 @@ type desktopBridge struct {
 	seen         *bridgeSeen
 	lastActivity time.Time
 	lastActive   time.Time
-	// mode is who serves the bridge: "app" (pm desktop), "serve" (pm bridge
+	// mode is who serves the bridge: "app" (pm desktop), "serve" (pm extension
 	// serve) or "native" (pm started by the browser through native messaging).
 	// In native mode pairing goes through pm extension link instead of a prompt.
 	mode string

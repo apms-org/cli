@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -19,15 +18,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
-
-func newBridgeCmd() *cobra.Command {
-	root := &cobra.Command{
-		Use:   "bridge",
-		Short: "Serve and manage the browser extension bridge",
-	}
-	root.AddCommand(newBridgeServeCmd(), newBridgeStatusCmd(), newBridgeTokenCmd(), newBridgeRotateCmd())
-	return root
-}
 
 func maskBridgeToken(t string) string {
 	if len(t) <= 10 {
@@ -186,7 +176,7 @@ func (u *serveUI) run() {
 		client := toStr(req["client"])
 		code := formatPairCode(toStr(req["code"]))
 		if !u.interactive {
-			u.printf("%s asked to connect (code %s). Denied because this terminal cannot answer. Run 'pm bridge serve' in a terminal, or paste the token from 'pm bridge token --show' into the extension.", client, code)
+			u.printf("%s asked to connect (code %s). Denied because this terminal cannot answer. Run 'pm extension serve' in a terminal, or paste the token from 'pm extension token --show' into the extension.", client, code)
 			u.answer(id, client, false)
 			continue
 		}
@@ -207,14 +197,14 @@ func (u *serveUI) run() {
 	}
 }
 
-func newBridgeServeCmd() *cobra.Command {
+func newExtensionServeCmd() *cobra.Command {
 	var port int
 	var locked, promptStdin bool
 	var idle time.Duration
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Serve the browser extension bridge without the desktop app",
-		Long:  "Serve the loopback bridge the APM browser extension talks to, for people who use the CLI without the desktop app. The HTTP API is the same one the desktop app serves.",
+		Short: "Serve the extension from this terminal instead of linking pm",
+		Long:  "Serve the loopback bridge the APM browser extension talks to, on 127.0.0.1, until you press Ctrl+C. It serves the same HTTP API as the desktop app and asks you here to approve pairing requests.\n\nMost people should run 'pm extension link' once instead, so the browser starts pm on its own. Use serve to watch requests live, to pick the idle timeout, or to avoid registering pm with your browsers.",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			var override *time.Duration
@@ -311,90 +301,7 @@ func runBridgeServe(port int, locked bool, idle *time.Duration, promptStdin bool
 	return 0
 }
 
-func newBridgeStatusCmd() *cobra.Command {
-	var port int
-	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Show whether a browser extension bridge is running",
-		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			os.Exit(runBridgeStatus(port))
-		},
-	}
-	cmd.Flags().IntVar(&port, "port", 0, "Port to probe (default 41417, or APM_BRIDGE_PORT)")
-	return cmd
-}
-
-func runBridgeStatus(port int) int {
-	if port <= 0 {
-		port = bridgePortFromEnv()
-	}
-	base := fmt.Sprintf("http://127.0.0.1:%d", port)
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(base + "/api/info")
-	if err != nil {
-		fmt.Printf("Nothing is listening on 127.0.0.1:%d. Open the APM app or run 'pm bridge serve'.\n", port)
-		return 1
-	}
-	var info struct {
-		Name     string `json:"name"`
-		Version  string `json:"version"`
-		API      int    `json:"api"`
-		Unlocked bool   `json:"unlocked"`
-	}
-	err = json.NewDecoder(resp.Body).Decode(&info)
-	resp.Body.Close()
-	if err != nil || resp.StatusCode != 200 || info.Name != "APM" {
-		fmt.Printf("Something other than APM is listening on 127.0.0.1:%d.\n", port)
-		return 1
-	}
-	vaultState := "locked"
-	if info.Unlocked {
-		vaultState = "unlocked"
-	}
-	fmt.Printf("Listening:  127.0.0.1:%d\n", port)
-	fmt.Printf("Version:    %s (bridge API %d)\n", info.Version, info.API)
-	token, _, ok := readBridgeToken(bridgeTokenFile())
-	if !ok {
-		fmt.Printf("Vault:      %s\n", vaultState)
-		fmt.Println("Token:      none yet. Run 'pm bridge token' to create one.")
-		return 0
-	}
-	req, _ := http.NewRequest("GET", base+"/api/status", nil)
-	req.Header.Set("x-apm-token", token)
-	req.Header.Set("x-apm-client", "pm bridge status")
-	sresp, err := client.Do(req)
-	if err != nil {
-		fmt.Printf("Vault:      %s\n", vaultState)
-		fmt.Printf("Token:      %s (the status request failed: %v)\n", bridgeTokenFingerprint(token), err)
-		return 1
-	}
-	defer sresp.Body.Close()
-	if sresp.StatusCode == http.StatusUnauthorized {
-		fmt.Printf("Vault:      %s\n", vaultState)
-		fmt.Printf("Token:      %s does not match the running bridge. It may use a different config directory.\n", bridgeTokenFingerprint(token))
-		return 1
-	}
-	var st struct {
-		Unlocked bool   `json:"unlocked"`
-		Readonly bool   `json:"readonly"`
-		Items    int    `json:"items"`
-		Name     string `json:"name"`
-	}
-	_ = json.NewDecoder(sresp.Body).Decode(&st)
-	switch {
-	case st.Unlocked && st.Readonly:
-		fmt.Printf("Vault:      unlocked, read-only, %d items\n", st.Items)
-	case st.Unlocked:
-		fmt.Printf("Vault:      unlocked, %d items\n", st.Items)
-	default:
-		fmt.Println("Vault:      locked")
-	}
-	fmt.Printf("Token:      %s (fingerprint)\n", bridgeTokenFingerprint(token))
-	return 0
-}
-
-func newBridgeTokenCmd() *cobra.Command {
+func newExtensionTokenCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "token",
 		Short: "Print the browser extension pairing token",
@@ -410,14 +317,14 @@ func newBridgeTokenCmd() *cobra.Command {
 				return
 			}
 			fmt.Printf("Pairing token: %s\n", maskBridgeToken(token))
-			fmt.Println("Run 'pm bridge token --show' to print it in full, then paste it into the extension's manual pairing field.")
+			fmt.Println("Run 'pm extension token --show' to print it in full, then paste it into the extension's manual pairing field.")
 		},
 	}
 	cmd.Flags().Bool("show", false, "Print the full token")
 	return cmd
 }
 
-func newBridgeRotateCmd() *cobra.Command {
+func newExtensionRotateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "rotate",
 		Short: "Replace the pairing token so every paired browser must pair again",
