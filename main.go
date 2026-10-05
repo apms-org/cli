@@ -3947,8 +3947,9 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 		if len(results) == 1 {
 			displayEntry(v, results[0], showPass, false)
 		} else {
+			look := newItemLookup(v)
 			for i, r := range results {
-				fmt.Printf("[%d] %s (%s)\n", i+1, r.Identifier, r.Type)
+				fmt.Printf("%s %s\n", resultIndex(i, len(results)), resultLine(look, r))
 			}
 		}
 		return
@@ -3971,7 +3972,8 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 
 	focusMode := 0
 	for {
-		results := performSearch(v, query)
+		look := newItemLookup(v)
+		results := searchItems(look, query)
 		if len(results) > 0 {
 			if selectedIndex >= len(results) {
 				selectedIndex = len(results) - 1
@@ -4017,7 +4019,7 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 			if _, exists := selectedItems[key]; exists {
 				prefix = "* "
 			}
-			line := fmt.Sprintf("%s[%d] %-30s (%s)", prefix, i+1, r.Identifier, r.Type)
+			line := fmt.Sprintf("%s%s %s", prefix, resultIndex(i, len(results)), resultLine(look, r))
 			if i == selectedIndex {
 				if focusMode == 1 {
 					fmt.Printf("\x1b[1;7m %s \x1b[0m \x1b[1;32m<-- PRESS E/D/V/SPACE/S\x1b[0m\r\n", line)
@@ -4237,10 +4239,27 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 }
 
 func performSearch(v *src.Vault, query string) []src.SearchResult {
-	all := v.SearchAll("")
+	return searchItems(newItemLookup(v), query)
+}
+
+// searchItems ranks items by name first. A login also matches on its
+// username, its websites and its passkeys' sites, and an Authenticator code on
+// its linked sites, below any name match.
+func searchItems(look *itemLookup, query string) []src.SearchResult {
+	q := strings.ToLower(strings.TrimSpace(query))
 	var scored []ScoredResult
-	for _, r := range all {
+	for _, r := range look.v.SearchAll("") {
 		score := rankMatch(query, r.Identifier)
+		if ref, ok := look.ref(r); ok && q != "" {
+			if t := itemTitle(ref); t != r.Identifier {
+				score = max(score, rankMatch(query, t))
+			}
+			for _, term := range look.searchTerms(ref) {
+				if term != "" && strings.Contains(strings.ToLower(term), q) {
+					score = max(score, 90)
+				}
+			}
+		}
 		if score > 0 {
 			scored = append(scored, ScoredResult{r, score})
 		}
@@ -4551,9 +4570,11 @@ func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, re
 
 	switch action {
 	case 'v':
+		// The view ends with its own copy prompt, which also waits for Enter.
 		displayEntry(v, res, showPass, true)
+		return
 	case 'q':
-		displayQuicklook(res)
+		displayQuicklook(v, res)
 	case 'i':
 		displayEntryMetadata(v, res)
 	case 'e':
@@ -4566,7 +4587,12 @@ func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, re
 		if readonly {
 			color.Red("Vault is READ-ONLY.")
 		} else {
-			fmt.Printf("Are you sure you want to delete '%s' (%s)? (y/n): ", res.Identifier, res.Type)
+			name, kind, warning := res.Identifier, res.Type, ""
+			look := newItemLookup(v)
+			if ref, ok := look.ref(res); ok {
+				name, kind, warning = itemTitle(ref), kindOf(ref).Label, deleteWarning(look, ref)
+			}
+			fmt.Printf("Delete %s (%s)? %s(y/n): ", name, kind, warning)
 			if strings.ToLower(readInput()) == "y" {
 				if deleteEntryByResult(v, res) {
 					data, err := src.EncryptVault(v, mp)
@@ -4589,7 +4615,7 @@ func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, re
 	readInput()
 }
 
-func displayQuicklook(res src.SearchResult) {
+func displayQuicklook(v *src.Vault, res src.SearchResult) {
 	switch res.Type {
 	case "Note":
 		n := res.Data.(src.SecureNoteEntry)
@@ -4636,7 +4662,11 @@ func displayQuicklook(res src.SearchResult) {
 		fmt.Printf("Quicklook: Document/%s (%s)\n", d.Name, d.FileName)
 		fmt.Printf("Size: %.2f KB\n", float64(len(d.Content))/1024)
 	default:
-		fmt.Printf("Quicklook is supported for notes and media entries only. Selected type: %s\n", res.Type)
+		look := newItemLookup(v)
+		if ref, ok := look.ref(res); ok {
+			lines, _ := itemCard(look, ref, false)
+			fmt.Println(strings.Join(lines, "\n"))
+		}
 	}
 }
 
@@ -4848,7 +4878,11 @@ func displayEntryMetadata(v *src.Vault, res src.SearchResult) {
 		}
 	}
 
-	fmt.Printf("Metadata: %s (%s)\n", res.Identifier, res.Type)
+	name, kind := res.Identifier, res.Type
+	if ref, ok := refForResult(v, res); ok {
+		name, kind = itemTitle(ref), kindOf(ref).Label
+	}
+	fmt.Printf("Metadata: %s (%s)\n", name, kind)
 	fmt.Println("--------------------------------------------------")
 	fmt.Printf("Space:                %s\n", space)
 	fmt.Printf("Category Key:         %s\n", category)
@@ -4894,547 +4928,68 @@ func displayEntryMetadata(v *src.Vault, res src.SearchResult) {
 	}
 }
 
-func prompt(label, current string) string {
-	fmt.Printf("%s [%s]: ", label, current)
-	input := readInput()
-	if input == "" {
-		return current
-	}
-	return input
-}
-
 func editEntryInVault(v *src.Vault, mp string, res src.SearchResult) {
-	fmt.Printf("Editing %s: %s\n", res.Type, res.Identifier)
-	updated := false
-
-	switch res.Type {
-	case "Password":
-		e := res.Data.(src.Entry)
-		newAcc := prompt("New Account", e.Account)
-		newUser := prompt("New Username", e.Username)
-
-		fmt.Print("New Password (blank to keep): ")
-		newPass, _ := readPassword()
-		fmt.Println()
-		if newPass == "" {
-			newPass = e.Password
-		}
-
-		extra := promptLoginExtras(e)
-		if err := editLoginEntry(v, e, newAcc, newUser, newPass, extra); err != nil {
-			color.Red("Error: %v", err)
-			return
-		}
-		updated = true
-	case "TOTP":
-		e := res.Data.(src.TOTPEntry)
-		newAcc := prompt("New Account", e.Account)
-		newSec := prompt("New Secret", e.Secret)
-
-		if err := editTOTPEntry(v, e, newAcc, newSec); err != nil {
-			color.Red("Error: %v", err)
-			return
-		}
-		updated = true
-	case "Token":
-		e := res.Data.(src.TokenEntry)
-		newName := prompt("New Name", e.Name)
-		newToken := prompt("New Token", e.Token)
-		newType := prompt("New Type", e.Type)
-
-		if v.DeleteToken(e.Name) {
-			v.AddToken(newName, newToken, newType)
-			updated = true
-		}
-	case "Note":
-		e := res.Data.(src.SecureNoteEntry)
-		newName := prompt("New Name", e.Name)
-		newContent, err := captureNoteContent(v, newName, e.Content)
-		if err != nil {
-			color.Yellow("Note edit canceled.")
-			return
-		}
-
-		if v.DeleteSecureNote(e.Name) {
-			v.AddSecureNote(newName, newContent)
-			updated = true
-		}
-	case "API Key":
-		e := res.Data.(src.APIKeyEntry)
-		newName := prompt("New Name", e.Name)
-		newService := prompt("New Service", e.Service)
-		newKey := prompt("New Key", e.Key)
-
-		if v.DeleteAPIKey(e.Name) {
-			v.AddAPIKey(newName, newService, newKey)
-			updated = true
-		}
-	case "SSH Key":
-		e := res.Data.(src.SSHKeyEntry)
-		newName := prompt("New Name", e.Name)
-		newKey := prompt("New Private Key", e.PrivateKey)
-
-		if v.DeleteSSHKey(e.Name) {
-			v.AddSSHKey(newName, newKey)
-			updated = true
-		}
-	case "Wi-Fi":
-		e := res.Data.(src.WiFiEntry)
-		newSSID := prompt("New SSID", e.SSID)
-		newPass := prompt("New Password", e.Password)
-		newSec := prompt("New Security Type", e.SecurityType)
-
-		if v.DeleteWiFi(e.SSID) {
-			v.AddWiFi(newSSID, newPass, newSec)
-			updated = true
-		}
-	case "Recovery Codes":
-		e := res.Data.(src.RecoveryCodeEntry)
-		newService := prompt("New Service", e.Service)
-		newCodesStr := prompt("New Codes (comma sep)", strings.Join(e.Codes, ","))
-		newCodes := strings.Split(newCodesStr, ",")
-		for i := range newCodes {
-			newCodes[i] = strings.TrimSpace(newCodes[i])
-		}
-
-		if v.DeleteRecoveryCode(e.Service) {
-			v.AddRecoveryCode(newService, newCodes)
-			updated = true
-		}
-	case "Certificate":
-		e := res.Data.(src.CertificateEntry)
-		newLabel := prompt("New Label", e.Label)
-		newCert := prompt("New Cert Data", e.CertData)
-		newKey := prompt("New Private Key", e.PrivateKey)
-		newIssuer := prompt("New Issuer", e.Issuer)
-		newExpiryStr := prompt("New Expiry (RFC3339)", e.Expiry.Format(time.RFC3339))
-
-		newExpiry, err := time.Parse(time.RFC3339, newExpiryStr)
-		if err != nil {
-			fmt.Println("Invalid time format, keeping old expiry.")
-			newExpiry = e.Expiry
-		}
-
-		if v.DeleteCertificate(e.Label) {
-			v.AddCertificate(newLabel, newCert, newKey, newIssuer, newExpiry)
-			updated = true
-		}
-	case "Banking":
-		e := res.Data.(src.BankingEntry)
-		newLabel := prompt("New Label", e.Label)
-		newType := prompt("New Type", e.Type)
-		newDetails := prompt("New Details", e.Details)
-		newCVV := prompt("New CVV", e.CVV)
-		newExpiry := prompt("New Expiry", e.Expiry)
-
-		if v.DeleteBankingItem(e.Label) {
-			v.AddBankingItem(newLabel, newType, newDetails, newCVV, newExpiry)
-			updated = true
-		}
-	case "Document":
-		e := res.Data.(src.DocumentEntry)
-		newName := prompt("New Name", e.Name)
-		newPath := prompt("New File Path for Content (leave blank to keep)", "")
-		newPass := prompt("New Password", e.Password)
-		newTagsStr := prompt("New Tags (comma sep)", strings.Join(e.Tags, ","))
-		newExpiry := prompt("New Expiry", e.Expiry)
-
-		newContent := e.Content
-		if newPath != "" {
-			c, err := os.ReadFile(newPath)
-			if err == nil {
-				newContent = c
-			} else {
-				fmt.Printf("Error reading file: %v. Keeping old content.\n", err)
-			}
-		}
-
-		newTags := strings.Split(newTagsStr, ",")
-		for i := range newTags {
-			newTags[i] = strings.TrimSpace(newTags[i])
-		}
-
-		if v.DeleteDocument(e.Name) {
-			v.AddDocument(newName, e.FileName, newContent, newPass, newTags, newExpiry)
-			updated = true
-		}
-	case "Government ID":
-		e := res.Data.(src.GovIDEntry)
-		newType := prompt("New Type", e.Type)
-		newID := prompt("New ID Number", e.IDNumber)
-		newName := prompt("New Name", e.Name)
-		newExpiry := prompt("New Expiry", e.Expiry)
-
-		if v.DeleteGovID(e.IDNumber) {
-			v.AddGovID(src.GovIDEntry{Type: newType, IDNumber: newID, Name: newName, Expiry: newExpiry})
-			updated = true
-		}
-	case "Medical Record":
-		e := res.Data.(src.MedicalRecordEntry)
-		newLabel := prompt("New Label", e.Label)
-		newIns := prompt("New Insurance ID", e.InsuranceID)
-		newPres := prompt("New Prescriptions", e.Prescriptions)
-		newAllergies := prompt("New Allergies", e.Allergies)
-
-		if v.DeleteMedicalRecord(e.Label) {
-			v.AddMedicalRecord(src.MedicalRecordEntry{Label: newLabel, InsuranceID: newIns, Prescriptions: newPres, Allergies: newAllergies})
-			updated = true
-		}
-	case "Travel":
-		e := res.Data.(src.TravelEntry)
-		newLabel := prompt("New Label", e.Label)
-		newTicket := prompt("New Ticket Num", e.TicketNumber)
-		newBooking := prompt("New Booking Code", e.BookingCode)
-		newLoyalty := prompt("New Loyalty Prog", e.LoyaltyProgram)
-
-		if v.DeleteTravelDoc(e.Label) {
-			v.AddTravelDoc(src.TravelEntry{Label: newLabel, TicketNumber: newTicket, BookingCode: newBooking, LoyaltyProgram: newLoyalty})
-			updated = true
-		}
-	case "Contact":
-		e := res.Data.(src.ContactEntry)
-		newName := prompt("New Name", e.Name)
-		newPhone := prompt("New Phone", e.Phone)
-		newEmail := prompt("New Email", e.Email)
-		newAddress := prompt("New Address", e.Address)
-
-		emergStr := "n"
-		if e.Emergency {
-			emergStr = "y"
-		}
-		newEmergStr := prompt("Emergency Contact? (y/n)", emergStr)
-		newEmerg := strings.ToLower(newEmergStr) == "y"
-
-		if v.DeleteContact(e.Name) {
-			v.AddContact(src.ContactEntry{Name: newName, Phone: newPhone, Email: newEmail, Address: newAddress, Emergency: newEmerg})
-			updated = true
-		}
-	case "Cloud Credentials":
-		e := res.Data.(src.CloudCredentialEntry)
-		newLabel := prompt("New Label", e.Label)
-		newAK := prompt("New Access Key", e.AccessKey)
-		newSK := prompt("New Secret Key", e.SecretKey)
-		newRegion := prompt("New Region", e.Region)
-		newAccID := prompt("New Account ID", e.AccountID)
-		newRole := prompt("New Role", e.Role)
-		newExp := prompt("New Expiration", e.Expiration)
-
-		if v.DeleteCloudCredential(e.Label) {
-			v.AddCloudCredential(src.CloudCredentialEntry{Label: newLabel, AccessKey: newAK, SecretKey: newSK, Region: newRegion, AccountID: newAccID, Role: newRole, Expiration: newExp})
-			updated = true
-		}
-	case "Kubernetes Secret":
-		e := res.Data.(src.K8sSecretEntry)
-		newName := prompt("New Name", e.Name)
-		newCluster := prompt("New Cluster URL", e.ClusterURL)
-		newNS := prompt("New K8s Namespace", e.K8sNamespace)
-		newExp := prompt("New Expiration", e.Expiration)
-
-		if v.DeleteK8sSecret(e.Name) {
-			v.AddK8sSecret(src.K8sSecretEntry{Name: newName, ClusterURL: newCluster, K8sNamespace: newNS, Expiration: newExp})
-			updated = true
-		}
-	case "Docker Registry":
-		e := res.Data.(src.DockerRegistryEntry)
-		newName := prompt("New Name", e.Name)
-		newURL := prompt("New Registry URL", e.RegistryURL)
-		newUser := prompt("New Username", e.Username)
-		newToken := prompt("New Token", e.Token)
-
-		if v.DeleteDockerRegistry(e.Name) {
-			v.AddDockerRegistry(src.DockerRegistryEntry{Name: newName, RegistryURL: newURL, Username: newUser, Token: newToken})
-			updated = true
-		}
-	case "SSH Config":
-		e := res.Data.(src.SSHConfigEntry)
-		newAlias := prompt("New Alias", e.Alias)
-		newHost := prompt("New Host", e.Host)
-		newUser := prompt("New User", e.User)
-		newPort := prompt("New Port", e.Port)
-		newKeyPath := prompt("New Key Path", e.KeyPath)
-		newPrivKey := prompt("New Private Key", e.PrivateKey)
-		newFingerprint := prompt("New Fingerprint", e.Fingerprint)
-
-		if v.DeleteSSHConfig(e.Alias) {
-			v.AddSSHConfig(src.SSHConfigEntry{Alias: newAlias, Host: newHost, User: newUser, Port: newPort, KeyPath: newKeyPath, PrivateKey: newPrivKey, Fingerprint: newFingerprint})
-			updated = true
-		}
-	case "CI/CD Secret":
-		e := res.Data.(src.CICDSecretEntry)
-		newName := prompt("New Name", e.Name)
-		newUnknown := prompt("New Webhook", e.Webhook)
-		newEnvVars := prompt("New Env Vars", e.EnvVars)
-
-		if v.DeleteCICDSecret(e.Name) {
-			v.AddCICDSecret(src.CICDSecretEntry{Name: newName, Webhook: newUnknown, EnvVars: newEnvVars})
-			updated = true
-		}
-	case "Software License":
-		e := res.Data.(src.SoftwareLicenseEntry)
-		newProd := prompt("New Product Name", e.ProductName)
-		newKey := prompt("New Serial Key", e.SerialKey)
-		newInfo := prompt("New Activation Info", e.ActivationInfo)
-		newExp := prompt("New Expiration", e.Expiration)
-
-		if v.DeleteSoftwareLicense(e.ProductName) {
-			v.AddSoftwareLicense(src.SoftwareLicenseEntry{ProductName: newProd, SerialKey: newKey, ActivationInfo: newInfo, Expiration: newExp})
-			updated = true
-		}
-	case "Legal Contract":
-		e := res.Data.(src.LegalContractEntry)
-		newName := prompt("New Name", e.Name)
-		newSum := prompt("New Summary", e.Summary)
-		newParties := prompt("New Parties Involved", e.PartiesInvolved)
-		newDate := prompt("New Signed Date", e.SignedDate)
-
-		if v.DeleteLegalContract(e.Name) {
-			v.AddLegalContract(src.LegalContractEntry{Name: newName, Summary: newSum, PartiesInvolved: newParties, SignedDate: newDate})
-			updated = true
-		}
-	default:
-		color.Yellow("Editing for %s not implemented.", res.Type)
+	ref, ok := refForResult(v, res)
+	if !ok {
+		color.Red("%s is no longer in the vault.", res.Identifier)
+		return
 	}
-	if updated {
-		data, err := src.EncryptVault(v, mp)
-		if err == nil {
-			err = src.SaveVault(vaultPath, data)
-		}
-		if err != nil {
-			cliSaveError(err)
-		} else {
-			src.SendAlert(v, src.LevelAll, "ENTRY MODIFIED", fmt.Sprintf("Modified entry: %s (%s)", res.Identifier, res.Type))
-			color.Green("Updated.")
-		}
-	}
+	editItemInteractive(v, mp, ref)
 }
 
+// displayEntry prints an item's card. With promptCopy it ends by offering to
+// copy its secrets, or to open its file, until the user presses Enter.
 func displayEntry(v *src.Vault, res src.SearchResult, showPass, promptCopy bool) {
-	showField := func(label, value string) {
-		if showPass {
-			fmt.Printf("%s: %s\n", label, value)
-			return
-		}
-		if strings.TrimSpace(value) == "" {
-			fmt.Printf("%s: (empty)\n", label)
-			return
-		}
-		fmt.Printf("%s: ******** (hidden", label)
-		if promptCopy {
-			fmt.Print(", press Enter to copy)\n")
-			fmt.Printf("Copy %s? [Enter=copy, type skip to continue]: ", strings.ToLower(label))
-			if strings.ToLower(strings.TrimSpace(readInput())) != "skip" {
-				copyToClipboardWithExpiry(value)
-			}
-			return
-		}
-		fmt.Println(")")
+	look := newItemLookup(v)
+	ref, ok := look.ref(res)
+	if !ok {
+		color.Red("%s is no longer in the vault.", res.Identifier)
+		return
 	}
-
-	fmt.Println("---")
-	switch res.Type {
-	case "Password":
-		e := res.Data.(src.Entry)
-		fmt.Printf("Type: Password\nAccount: %s\nUser: %s\n", e.Account, e.Username)
-		showField("Password", e.Password)
-		if e.Website != "" {
-			fmt.Printf("Website: %s\n", e.Website)
+	lines, copies := itemCard(look, ref, showPass)
+	fmt.Println(strings.Join(lines, "\n"))
+	switch d := res.Data.(type) {
+	case src.CertificateEntry:
+		if left := time.Until(d.Expiry); !d.Expiry.IsZero() && left < 0 {
+			color.Red("\n  This certificate expired on %s.", d.Expiry.Format("2006-01-02"))
+		} else if !d.Expiry.IsZero() && left < 30*24*time.Hour {
+			color.Red("\n  This certificate expires in %d days.", int(left.Hours()/24))
 		}
-		if len(e.URLs) > 0 {
-			fmt.Printf("Other websites: %s\n", strings.Join(e.URLs, ", "))
-		}
-		if e.TOTP != "" {
-			code, err := src.GenerateTOTP(e.TOTP)
-			if err != nil {
-				code = "INVALID SECRET"
-			}
-			showField("2FA code", code)
-		}
-		for _, cf := range e.Fields {
-			label := cf.Label
-			if label == "" {
-				label = "Field"
-			}
-			if cf.Hidden {
-				showField(label, cf.Value)
-			} else {
-				fmt.Printf("%s: %s\n", label, cf.Value)
-			}
-		}
-		for _, line := range loginExtraLines(v, e) {
-			fmt.Println(line)
-		}
-	case "TOTP":
-		t := res.Data.(src.TOTPEntry)
-		code, err := src.GenerateTOTP(t.Secret)
-		if err != nil {
-			code = "INVALID SECRET"
-		}
-		fmt.Printf("Type: TOTP\nAccount: %s\n", t.Account)
-		if v != nil {
-			if sites := totpDomainsFor(v, t.Account); len(sites) > 0 {
-				fmt.Printf("Linked site: %s\n", strings.Join(sites, ", "))
-			}
-		}
-		showField("Code", code)
-	case "Token":
-		tok := res.Data.(src.TokenEntry)
-		fmt.Printf("Type: Token\nName: %s\n", tok.Name)
-		showField("Token", tok.Token)
-	case "Note":
-		n := res.Data.(src.SecureNoteEntry)
-		fmt.Printf("Type: Note\nName: %s\nContent:\n%s\n", n.Name, n.Content)
-	case "API Key":
-		k := res.Data.(src.APIKeyEntry)
-		fmt.Printf("Type: API Key\nLabel: %s\nService: %s\n", k.Name, k.Service)
-		showField("Key", k.Key)
-	case "SSH Key":
-		s := res.Data.(src.SSHKeyEntry)
-		fmt.Printf("Type: SSH Key\nLabel: %s\n", s.Name)
-		showField("Private Key", s.PrivateKey)
-	case "Wi-Fi":
-		w := res.Data.(src.WiFiEntry)
-		fmt.Printf("Type: Wi-Fi\nSSID: %s\nSecurity: %s\n", w.SSID, w.SecurityType)
-		showField("Password", w.Password)
-	case "Recovery Codes":
-		r := res.Data.(src.RecoveryCodeEntry)
-		fmt.Printf("Type: Recovery\nService: %s\n", r.Service)
-		showField("Codes", strings.Join(r.Codes, ", "))
-	case "Certificate":
-		c := res.Data.(src.CertificateEntry)
-		fmt.Printf("Type: Certificate\nLabel: %s\nIssuer: %s\nExpiry: %s\n", c.Label, c.Issuer, c.Expiry.Format("2006-01-02"))
-		if time.Until(c.Expiry) < 30*24*time.Hour {
-			color.Red("  [ALERT] Certificate is expiring soon! (%s left)\n", time.Until(c.Expiry).Truncate(time.Hour))
-		}
-		showField("Cert Data", c.CertData)
-		if c.PrivateKey != "" {
-			showField("Private Key", c.PrivateKey)
-		}
-	case "Banking":
-		b := res.Data.(src.BankingEntry)
-		fmt.Printf("Type: Banking (%s)\nLabel: %s\n", b.Type, b.Label)
-		displayDetails := b.Details
-		if b.Type == "Card" && len(displayDetails) > 4 {
-			displayDetails = "**** **** **** " + displayDetails[len(displayDetails)-4:]
-		} else if len(displayDetails) > 4 {
-			displayDetails = displayDetails[:4] + " **** **** ****"
-		}
-		fmt.Printf("Details (Redacted): %s\n", displayDetails)
-		showField("Full Details", b.Details)
-		if b.CVV != "" {
-			showField("CVV", b.CVV)
-		}
-		if b.Expiry != "" {
-			fmt.Printf("Expiry: %s\n", b.Expiry)
-		}
-	case "Document":
-		d := res.Data.(src.DocumentEntry)
-		fmt.Printf("Type: Document\nName: %s\nFile: %s\n", d.Name, d.FileName)
-		if promptCopy {
-			fmt.Print("This is a secure document. Open it? (y/n): ")
-			if strings.ToLower(readInput()) == "y" {
-				fmt.Print("Enter Document Password: ")
-				docPass, _ := readPassword()
-				fmt.Println()
-				if docPass == d.Password {
-					tmpDir := os.TempDir()
-					tmpFile := filepath.Join(tmpDir, d.FileName)
-					err := os.WriteFile(tmpFile, d.Content, 0600)
-					if err != nil {
-						color.Red("Error writing temporary file: %v\n", err)
-						return
-					}
-					defer func() {
-						time.Sleep(5 * time.Second)
-						_ = os.Remove(tmpFile)
-					}()
-					color.Green("Opening document...")
-					var cmd *exec.Cmd
-					if runtime.GOOS == "windows" {
-						cmd = exec.Command("cmd", "/c", "start", "", tmpFile)
-					} else if runtime.GOOS == "darwin" {
-						cmd = exec.Command("open", tmpFile)
-					} else {
-						cmd = exec.Command("xdg-open", tmpFile)
-					}
-					_ = cmd.Run()
-				} else {
-					color.Red("Incorrect document password.")
-				}
-			}
-		}
-	case "Government ID":
-		g := res.Data.(src.GovIDEntry)
-		fmt.Printf("Type: %s\nName: %s\nExpiry: %s\n", g.Type, g.Name, g.Expiry)
-		showField("ID Number", g.IDNumber)
-	case "Medical Record":
-		m := res.Data.(src.MedicalRecordEntry)
-		fmt.Printf("Type: Medical Record\nLabel: %s\nInsurance ID: %s\nPrescriptions: %s\nAllergies: %s\n", m.Label, m.InsuranceID, m.Prescriptions, m.Allergies)
-	case "Travel":
-		t := res.Data.(src.TravelEntry)
-		fmt.Printf("Type: Travel\nLabel: %s\nTicket: %s\nLoyalty: %s\n", t.Label, t.TicketNumber, t.LoyaltyProgram)
-		showField("Booking Code", t.BookingCode)
-	case "Contact":
-		c := res.Data.(src.ContactEntry)
-		fmt.Printf("Type: Contact\nName: %s\nPhone: %s\nEmail: %s\nAddress: %s\nEmergency: %v\n", c.Name, c.Phone, c.Email, c.Address, c.Emergency)
-	case "Cloud Credentials":
-		c := res.Data.(src.CloudCredentialEntry)
-		fmt.Printf("Type: Cloud Credentials\nLabel: %s\nRegion: %s\nAccount ID: %s\nRole: %s\nExpiration: %s\n", c.Label, c.Region, c.AccountID, c.Role, c.Expiration)
-		showField("Access Key", c.AccessKey)
-		showField("Secret Key", c.SecretKey)
-	case "Kubernetes Secret":
-		k := res.Data.(src.K8sSecretEntry)
-		fmt.Printf("Type: K8s Secret\nName: %s\nCluster URL: %s\nNamespace: %s\nExpiration: %s\n", k.Name, k.ClusterURL, k.K8sNamespace, k.Expiration)
-	case "Docker Registry":
-		d := res.Data.(src.DockerRegistryEntry)
-		fmt.Printf("Type: Docker Registry\nName: %s\nRegistry URL: %s\nUsername: %s\n", d.Name, d.RegistryURL, d.Username)
-		showField("Token", d.Token)
-	case "SSH Config":
-		s := res.Data.(src.SSHConfigEntry)
-		fmt.Printf("Type: SSH Config\nAlias: %s\nHost: %s\nUser: %s\nPort: %s\nKey Path: %s\nFingerprint: %s\n", s.Alias, s.Host, s.User, s.Port, s.KeyPath, s.Fingerprint)
-		showField("Private Key", s.PrivateKey)
-	case "CI/CD Secret":
-		c := res.Data.(src.CICDSecretEntry)
-		fmt.Printf("Type: CI/CD Secret\nName: %s\nWebhook: %s\nEnv Vars: %s\n", c.Name, c.Webhook, c.EnvVars)
-	case "Software License":
-		s := res.Data.(src.SoftwareLicenseEntry)
-		fmt.Printf("Type: Software License\nProduct: %s\nActivation: %s\nExpiration: %s\n", s.ProductName, s.ActivationInfo, s.Expiration)
-		showField("Serial Key", s.SerialKey)
-	case "Legal Contract":
-		l := res.Data.(src.LegalContractEntry)
-		fmt.Printf("Type: Legal Contract\nName: %s\nSummary: %s\nParties: %s\nSigned: %s\n", l.Name, l.Summary, l.PartiesInvolved, l.SignedDate)
-	case "Audio":
-		a := res.Data.(src.AudioEntry)
-		fmt.Printf("Type: Audio\nName: %s\nFile: %s\nSize: %.2f KB\n", a.Name, a.FileName, float64(len(a.Content))/1024)
-		if promptCopy {
-			fmt.Print("Open audio file? (y/n): ")
-			if strings.ToLower(readInput()) == "y" {
-				openTempMediaFile(a.FileName, a.Content)
-			}
-		}
-	case "Video":
-		vi := res.Data.(src.VideoEntry)
-		fmt.Printf("Type: Video\nName: %s\nFile: %s\nSize: %.2f KB\n", vi.Name, vi.FileName, float64(len(vi.Content))/1024)
-		if promptCopy {
-			fmt.Println("Video quicklook is not available in terminal mode. Use open if needed.")
-			fmt.Print("Open video file? (y/n): ")
-			if strings.ToLower(readInput()) == "y" {
-				openTempMediaFile(vi.FileName, vi.Content)
-			}
-		}
-	case "Photo":
-		p := res.Data.(src.PhotoEntry)
-		fmt.Printf("Type: Photo\nName: %s\nFile: %s\n", p.Name, p.FileName)
-		if preview, err := renderPhotoASCIIQuicklook(p.Content, 80); err == nil {
+	case src.PhotoEntry:
+		if preview, err := renderPhotoASCIIQuicklook(d.Content, 80); err == nil {
+			fmt.Println()
 			fmt.Println(preview)
 		}
-		if promptCopy {
-			fmt.Print("Open photo? (y/n): ")
-			if strings.ToLower(readInput()) == "y" {
-				openTempMediaFile(p.FileName, p.Content)
-			}
+	}
+	if !promptCopy {
+		return
+	}
+	var open func()
+	switch d := res.Data.(type) {
+	case src.DocumentEntry:
+		open = func() { openSecureDocument(d) }
+	case src.AudioEntry:
+		open = func() { openTempMediaFile(d.FileName, d.Content) }
+	case src.VideoEntry:
+		open = func() { openTempMediaFile(d.FileName, d.Content) }
+	case src.PhotoEntry:
+		open = func() { openTempMediaFile(d.FileName, d.Content) }
+	}
+	copyMenu(copies, open)
+}
+
+func openSecureDocument(d src.DocumentEntry) {
+	if d.Password != "" {
+		fmt.Print("Document password: ")
+		pass, _ := readPassword()
+		fmt.Println()
+		if pass != d.Password {
+			color.Red("Incorrect document password.")
+			return
 		}
 	}
-	fmt.Println("---")
+	color.Green("Opening %s...", d.FileName)
+	openTempMediaFile(d.FileName, d.Content)
 }
 
 func openTempMediaFile(fileName string, content []byte) {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -155,92 +154,9 @@ func totpSiteSuffix(v *src.Vault, account string) string {
 	return ""
 }
 
-func loginExtraLines(v *src.Vault, e src.Entry) []string {
-	out := []string{}
-	if n := strings.TrimSpace(e.Notes); n != "" {
-		out = append(out, "Notes: "+strings.ReplaceAll(n, "\n", "\n       "))
-	}
-	if n := len(e.Passkeys); n > 0 {
-		rps := []string{}
-		seen := map[string]bool{}
-		for _, pk := range e.Passkeys {
-			if rp := strings.ToLower(pk.RPID); rp != "" && !seen[rp] {
-				seen[rp] = true
-				rps = append(rps, pk.RPID)
-			}
-		}
-		line := fmt.Sprintf("Passkeys: %d", n)
-		if len(rps) > 0 {
-			line += " (" + strings.Join(rps, ", ") + ")"
-		}
-		out = append(out, line)
-	}
-	if v == nil || e.TOTP != "" {
-		return out
-	}
-	ix := newBridgeIndex(v)
-	for _, r := range ix.refs {
-		if r.Spec.ID != "password" || r.Title != e.Account || r.Space != e.Space {
-			continue
-		}
-		if t, ok := ix.linkedTOTP(r); ok {
-			line := "One-time code: " + t.Title
-			if t.Space != r.Space {
-				line += " (space " + spaceOrDefaultName(t.Space) + ")"
-			}
-			out = append(out, line)
-		}
-		break
-	}
-	return out
-}
-
 func spaceOrDefaultName(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "default"
 	}
 	return s
-}
-
-func findLoginRef(v *src.Vault, e src.Entry) (src.VaultItemRef, bool) {
-	for _, r := range v.ItemRefs() {
-		if r.Spec.ID == "password" && r.Title == e.Account && r.Space == e.Space {
-			return r, true
-		}
-	}
-	return src.VaultItemRef{}, false
-}
-
-func editLoginEntry(v *src.Vault, e src.Entry, account, username, password string, extra map[string]any) error {
-	if password != e.Password && v.ActivePolicy.PasswordPolicy.MinLength > 0 {
-		if err := v.ActivePolicy.PasswordPolicy.Validate(password); err != nil {
-			return err
-		}
-	}
-	ref, ok := findLoginRef(v, e)
-	if !ok {
-		return errors.New("that login no longer exists")
-	}
-	f := map[string]any{"account": account, "username": username, "password": password}
-	for k, val := range extra {
-		f[k] = val
-	}
-	_, _, err := v.UpdateItem(ref.ID, f, nil)
-	if errors.Is(err, src.ErrItemExists) {
-		return fmt.Errorf("a login called %s already exists in this space", account)
-	}
-	return err
-}
-
-func editTOTPEntry(v *src.Vault, e src.TOTPEntry, account, secret string) error {
-	for _, r := range v.ItemRefs() {
-		if r.Spec.ID == "totp" && r.Title == e.Account && r.Space == e.Space {
-			_, _, err := v.UpdateItem(r.ID, map[string]any{"account": account, "secret": secret}, nil)
-			if errors.Is(err, src.ErrItemExists) {
-				return fmt.Errorf("a TOTP entry called %s already exists in this space", account)
-			}
-			return err
-		}
-	}
-	return errors.New("that TOTP entry no longer exists")
 }
