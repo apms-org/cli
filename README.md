@@ -186,9 +186,6 @@ A request expires after 2 minutes, and only one can wait at a time. `pm bridge s
 | `pm bridge status [--port N]` | Show whether a bridge is listening, its version, lock state, item count and token fingerprint |
 | `pm bridge token [--show]` | Print the pairing token, masked unless `--show` is given |
 | `pm bridge rotate` | Replace the pairing token. Every paired browser must pair again. A running bridge picks up the new token on its next request |
-| `pm passkeys list [query]` | List saved website passkeys: site, user, label, login, space, dates and sign count. Private keys are never shown |
-| `pm passkeys rename <credentialId\|rpId> <label>` | Label a passkey. When a site has several, APM lists them and asks for the credential id |
-| `pm passkeys rm <credentialId\|rpId> [--yes]` | Remove a passkey after a y/N confirmation |
 | `pm totp link <entry> <domain>` | Link a one-time code to a site so the extension offers it there |
 | `pm totp unlink <entry> [domain]` | Remove a one-time code's site links |
 

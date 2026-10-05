@@ -127,9 +127,6 @@ Notes:
 - `pm bridge status [--port N]`
 - `pm bridge token [--show]`
 - `pm bridge rotate`
-- `pm passkeys list [query]`
-- `pm passkeys rename <credentialId|rpId> <label>`
-- `pm passkeys rm <credentialId|rpId> [--yes]`
 - `pm totp link <entry> <domain>`
 - `pm totp unlink <entry> [domain]`
 
