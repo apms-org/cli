@@ -188,6 +188,9 @@ func GenerateSalt(length int) ([]byte, error) {
 
 func GeneratePassword(length int) (string, error) {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+"
+	if length < 1 {
+		return "", fmt.Errorf("password length must be at least 1")
+	}
 	result := make([]byte, length)
 	for i := range result {
 		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))

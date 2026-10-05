@@ -21,6 +21,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const mcpMaxPasswordLength = 256
+
 var mcpToolPermissions = []string{
 	"list_vault",
 	"get_entry",
@@ -932,7 +934,7 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 			Limit int `json:"limit"`
 		}
 		json.Unmarshal(req.Params.Arguments, &args)
-		if args.Limit == 0 {
+		if args.Limit <= 0 {
 			args.Limit = 20
 		}
 
@@ -958,7 +960,7 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 	s.AddTool(&mcp.Tool{
 		Name:        "generate_password",
 		Description: "Generate a secure random password",
-		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"length": map[string]any{"type": "integer"}}},
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"length": map[string]any{"type": "integer", "minimum": 1, "maximum": mcpMaxPasswordLength}}},
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		if !hasPermission(mcpToken.Permissions, "generate_password") {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Denied"}}}, nil
@@ -970,7 +972,13 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		if args.Length == 0 {
 			args.Length = 20
 		}
-		pwd, _ := GeneratePassword(args.Length)
+		if args.Length < 1 || args.Length > mcpMaxPasswordLength {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("length must be between 1 and %d", mcpMaxPasswordLength)}}}, nil
+		}
+		pwd, err := GeneratePassword(args.Length)
+		if err != nil {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Could not generate a password"}}}, nil
+		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: pwd}}}, nil
 	})
 
