@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,15 +11,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
+	"github.com/aaravmaloo/apm/internal/tty"
 	src "github.com/aaravmaloo/apm/src"
 )
 
-func stdinIsTerminal() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+func stdinIsTerminal() bool { return tty.Interactive() }
 
 var (
 	cDim  = color.New(color.Faint).SprintFunc()
@@ -29,11 +29,18 @@ var (
 	cAcc  = color.New(color.FgCyan).SprintFunc()
 )
 
-func promptHidden(label string) string {
+// promptHidden asks for a password with the label on stderr, so it stays
+// out of piped output. Esc ends the command with cancelled.
+func promptHidden(label, cancelled string) string {
 	fmt.Fprint(os.Stderr, label)
-	pw, err := readPassword()
-	fmt.Fprintln(os.Stderr)
-	if err != nil {
+	pw, err := tty.ReadLine(tty.LineOptions{Hidden: true})
+	if !tty.Interactive() || !stdoutIsTerminal() {
+		fmt.Fprintln(os.Stderr)
+	}
+	if err = exitOnInputError(err); err != nil {
+		if errors.Is(err, tty.ErrCanceled) {
+			exitCancelled(cancelled)
+		}
 		return ""
 	}
 	return pw
@@ -86,7 +93,7 @@ func readTransfer(path, password, from string, interactive bool) (*src.TransferS
 			} else {
 				fmt.Fprintln(os.Stderr, err.Error())
 			}
-			password = promptHidden("Export password: ")
+			password = promptHidden("Export password: ", "Cancelled.")
 			if password == "" {
 				return nil, err
 			}
@@ -284,7 +291,9 @@ func parsePolicy(v string) (string, error) {
 	return "", fmt.Errorf("%q is not a policy. Use skip, merge, replace, keep-both or ask", v)
 }
 
-func decideRow(r src.TransferRow, showSecrets bool) string {
+// decideRow asks what to do with one conflicting row. ok is false when the
+// user pressed Esc, which cancels the import.
+func decideRow(r src.TransferRow, showSecrets bool) (action string, ok bool) {
 	fmt.Printf("%s %s %s%s\n", statusMark(r.Status), cBold(r.Title), src.TypeLabel(r.Type), rowWhere(r))
 	fmt.Println("  " + cDim(r.Reason))
 	for _, c := range r.Changes {
@@ -311,18 +320,18 @@ func decideRow(r src.TransferRow, showSecrets bool) string {
 		opts = append(opts, l)
 		back[l] = a
 	}
-	def := opts[0]
-	for _, o := range opts {
+	def := 0
+	for i, o := range opts {
 		if back[o] == r.Default {
-			def = o
+			def = i
 		}
 	}
-	ans := def
-	if err := survey.AskOne(&survey.Select{Message: "What should APM do?", Options: opts, Default: def}, &ans); err != nil {
-		return r.Default
+	i, err := selectOption(tty.SelectOptions{Title: "What should APM do?", Options: opts, Initial: def})
+	if err != nil {
+		return "", false
 	}
 	fmt.Println()
-	return back[ans]
+	return back[opts[i]], true
 }
 
 func newImportCmd() *cobra.Command {
@@ -482,11 +491,12 @@ func runImport(cmd *cobra.Command, path string) {
 			"Replace all with the file's values",
 			"Keep both for all",
 		}
-		ans := choices[0]
-		if err := survey.AskOne(&survey.Select{Message: fmt.Sprintf("How should APM handle the %s?", plural(len(contested), "conflict or duplicate")), Options: choices, Default: choices[0]}, &ans); err != nil {
+		i, err := selectOption(tty.SelectOptions{Title: fmt.Sprintf("How should APM handle the %s?", plural(len(contested), "conflict or duplicate")), Options: choices})
+		if err != nil {
 			fmt.Println("Import cancelled.")
 			return
 		}
+		ans := choices[i]
 		fmt.Println()
 		pick := map[string]string{choices[2]: src.ActionSkip, choices[3]: src.ActionMerge, choices[4]: src.ActionReplace, choices[5]: src.ActionAdd}
 		switch ans {
@@ -506,7 +516,12 @@ func runImport(cmd *cobra.Command, path string) {
 			if (r.Status == src.RowConflict && onConflict != "" && onConflict != "ask") || (r.Status == src.RowDuplicate && onDuplicate != "" && onDuplicate != "ask") {
 				continue
 			}
-			decisions[r.Index] = decideRow(r, show)
+			action, ok := decideRow(r, show)
+			if !ok {
+				fmt.Println("Import cancelled. Nothing changed.")
+				return
+			}
+			decisions[r.Index] = action
 		}
 	}
 
@@ -540,8 +555,7 @@ func runImport(cmd *cobra.Command, path string) {
 		} else {
 			q += " into " + spaceLabel(space) + "?"
 		}
-		ok := true
-		if err := survey.AskOne(&survey.Confirm{Message: q, Default: true}, &ok); err != nil || !ok {
+		if ok, cancelled := confirmOrCancel(q+" (Y/n) ", true); cancelled || !ok {
 			fmt.Println("Import cancelled. Nothing changed.")
 			return
 		}
@@ -746,8 +760,7 @@ func runExport(cmd *cobra.Command) {
 		if !interactive {
 			cliFail("%s exists. Use --force to overwrite it.", output)
 		}
-		ok := false
-		if err := survey.AskOne(&survey.Confirm{Message: output + " exists. Overwrite it?", Default: false}, &ok); err != nil || !ok {
+		if ok, cancelled := confirmOrCancel(output+" exists. Overwrite it? (y/N) ", false); cancelled || !ok {
 			fmt.Println("Export cancelled.")
 			return
 		}
@@ -756,7 +769,8 @@ func runExport(cmd *cobra.Command) {
 		if password == "\x00ask" || (password == "" && !noEncrypt && interactive) {
 			want := true
 			if password == "" {
-				if err := survey.AskOne(&survey.Confirm{Message: "Encrypt the export with a password?", Default: true}, &want); err != nil {
+				var cancelled bool
+				if want, cancelled = confirmOrCancel("Encrypt the export with a password? (Y/n) ", true); cancelled {
 					fmt.Println("Export cancelled.")
 					return
 				}
@@ -764,12 +778,15 @@ func runExport(cmd *cobra.Command) {
 			password = ""
 			if want {
 				for password == "" {
-					p1 := promptHidden("Export password (not your master password): ")
+					p1 := promptHidden("Export password (not your master password): ", "Export cancelled.")
+					if p1 == "" && !stdinIsTerminal() {
+						cliFail("No export password given.")
+					}
 					if len(p1) < 8 {
 						fmt.Fprintln(os.Stderr, cBad("Use at least 8 characters."))
 						continue
 					}
-					if promptHidden("Repeat it: ") != p1 {
+					if promptHidden("Repeat it: ", "Export cancelled.") != p1 {
 						fmt.Fprintln(os.Stderr, cBad("The passwords do not match."))
 						continue
 					}

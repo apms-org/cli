@@ -2,14 +2,13 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"golang.org/x/term"
 
+	"github.com/aaravmaloo/apm/internal/tty"
 	src "github.com/aaravmaloo/apm/src"
 )
 
@@ -372,7 +371,7 @@ func truncateNoteText(s string, max int) string {
 // captureNoteContent opens the full-screen note editor. In non-interactive
 // contexts it falls back to reading plain lines until an empty line is sent.
 func captureNoteContent(vault *src.Vault, title, initial string) (string, error) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !tty.Interactive() {
 		if strings.TrimSpace(initial) != "" {
 			return initial, nil
 		}
@@ -397,8 +396,13 @@ func captureNoteContent(vault *src.Vault, title, initial string) (string, error)
 	}
 
 	model := newNoteEditorModel(title, space, initial)
+	// Hand bubbletea a cooked terminal with no keys left over from the
+	// prompts before it.
+	tty.Restore()
+	tty.Discard()
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	final, err := program.Run()
+	tty.Discard()
 	if err != nil {
 		return "", fmt.Errorf("note editor error: %w", err)
 	}

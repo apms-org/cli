@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
@@ -28,25 +27,21 @@ import (
 	"context"
 
 	injectcmd "github.com/aaravmaloo/apm/cmd"
+	"github.com/aaravmaloo/apm/internal/tty"
 	src "github.com/aaravmaloo/apm/src"
 
 	"github.com/aaravmaloo/apm/src/touchid"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/fatih/color"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 	oauth "golang.org/x/oauth2"
-	"golang.org/x/term"
 	"gopkg.in/gomail.v2"
 
-	"os/signal"
-	"syscall"
 	"unicode"
 )
 
 var vaultPath string
-var inputReader *bufio.Reader
 
 func init() {
 	exe, err := os.Executable()
@@ -71,7 +66,6 @@ func init() {
 	} else {
 		vaultPath = filepath.Clean(filepath.Join(filepath.Dir(exe), vaultFile))
 	}
-	inputReader = bufio.NewReader(os.Stdin)
 }
 
 func main() {
@@ -93,8 +87,7 @@ func main() {
 		fmt.Println("Choose Sync Mode:")
 		fmt.Println("1. APM_PUBLIC (Fast, no signup, shared storage)")
 		fmt.Println("2. Self-Hosted (Secure, uses your own Drive, requires login)")
-		fmt.Print("Selection (1/2): ")
-		modeSelection := readInput()
+		modeSelection := promptLine("Selection (1/2): ")
 
 		var mode string
 		var token []byte
@@ -120,8 +113,7 @@ func main() {
 		var gdriveKey string
 		v.DriveKeyMetadataConsent = promptKeyMetadataConsent("Google Drive")
 		if v.DriveKeyMetadataConsent {
-			fmt.Print("Enter Custom Retrieval Key (leave blank to generate randomly): ")
-			customKey := readInput()
+			customKey := promptLine("Enter Custom Retrieval Key (leave blank to generate randomly): ")
 			if customKey != "" {
 				gdriveKey = customKey
 			} else {
@@ -174,21 +166,17 @@ func main() {
 		fmt.Println("Choose authentication type:")
 		fmt.Println("1. Personal Access Token (classic/fine-grained)")
 		fmt.Println("2. OAuth2 Access Token")
-		fmt.Print("Selection (1/2) [1]: ")
-		authChoice := strings.TrimSpace(readInput())
+		authChoice := strings.TrimSpace(promptLine("Selection (1/2) [1]: "))
 		tokenLabel := "GitHub token"
 		if authChoice == "2" {
 			tokenLabel = "GitHub OAuth2 access token"
 		}
-		fmt.Printf("Enter %s: ", tokenLabel)
-		pat, err := readPassword()
+		pat, err := promptPassword(fmt.Sprintf("Enter %s: ", tokenLabel))
 		if err != nil {
 			color.Red("Error reading token: %v", err)
 			return err
 		}
-		fmt.Println()
-		fmt.Print("Enter GitHub Repo (format: owner/repo): ")
-		repo := readInput()
+		repo := promptLine("Enter GitHub Repo (format: owner/repo): ")
 		if pat == "" || repo == "" {
 			color.Red("Missing token or repo.")
 			return fmt.Errorf("missing token or repo")
@@ -311,8 +299,7 @@ func main() {
 				color.Cyan("2. Developer & Infrastructure")
 				color.Cyan("3. Media & Files")
 				color.Cyan("4. Finance & Legal")
-				fmt.Print("\nSelect Category: ")
-				catChoice := readInput()
+				catChoice := promptLine("\nSelect Category: ")
 
 				switch catChoice {
 				case "1":
@@ -322,8 +309,7 @@ func main() {
 					fmt.Println("3. Government ID")
 					fmt.Println("4. Contact")
 					fmt.Println("5. Medical Record")
-					fmt.Print("\nSelect item: ")
-					sub := readInput()
+					sub := promptLine("\nSelect item: ")
 					switch sub {
 					case "1":
 						choice = "1"
@@ -346,8 +332,7 @@ func main() {
 					fmt.Println("6. Kubernetes Secret")
 					fmt.Println("7. Docker Registry")
 					fmt.Println("8. CI/CD Secret")
-					fmt.Print("\nSelect item: ")
-					sub := readInput()
+					sub := promptLine("\nSelect item: ")
 					switch sub {
 					case "1":
 						choice = "5"
@@ -373,8 +358,7 @@ func main() {
 					fmt.Println("3. Video")
 					fmt.Println("4. Photo")
 					fmt.Println("5. Secure Note")
-					fmt.Print("\nSelect item: ")
-					sub := readInput()
+					sub := promptLine("\nSelect item: ")
 					switch sub {
 					case "1":
 						choice = "11"
@@ -396,8 +380,7 @@ func main() {
 					fmt.Println("5. Software License")
 					fmt.Println("6. Legal Contract")
 					fmt.Println("7. Travel Doc")
-					fmt.Print("\nSelect item: ")
-					sub := readInput()
+					sub := promptLine("\nSelect item: ")
 					switch sub {
 					case "1":
 						choice = "10"
@@ -427,13 +410,9 @@ func main() {
 
 			switch choice {
 			case "1":
-				fmt.Print("Account Name: ")
-				acc := readInput()
-				fmt.Print("Username: ")
-				user := readInput()
-				fmt.Print("Password (leave blank to generate): ")
-				pass, _ := readPassword()
-				fmt.Println()
+				acc := promptLine("Account Name: ")
+				user := promptLine("Username: ")
+				pass, _ := promptPassword("Password (leave blank to generate): ")
 				if pass == "" {
 					pass, _ = src.GeneratePassword(16)
 					fmt.Println("Generated password created and saved.")
@@ -443,18 +422,15 @@ func main() {
 					return
 				}
 			case "2":
-				fmt.Print("Account Name: ")
-				acc := readInput()
-				fmt.Print("Secret: ")
-				sec := readInput()
+				acc := promptLine("Account Name: ")
+				sec := promptLine("Secret: ")
 				sec = strings.ReplaceAll(sec, " ", "")
 				sec = strings.ToUpper(sec)
 				if err := vault.AddTOTPEntry(acc, sec); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
-				fmt.Print("Link domain for autofill (optional, e.g. github.com): ")
-				domainLink := normalizeDomainInput(readInput())
+				domainLink := normalizeDomainInput(promptLine("Link domain for autofill (optional, e.g. github.com): "))
 				if domainLink != "" {
 					if vault.TOTPDomainLinks == nil {
 						vault.TOTPDomainLinks = make(map[string]string)
@@ -462,19 +438,15 @@ func main() {
 					vault.TOTPDomainLinks[domainLink] = acc
 				}
 			case "3":
-				fmt.Print("Token Name: ")
-				name := readInput()
-				fmt.Print("Token: ")
-				tok := readInput()
-				fmt.Print("Type (e.g. GitHub): ")
-				tType := readInput()
+				name := promptLine("Token Name: ")
+				tok := promptLine("Token: ")
+				tType := promptLine("Type (e.g. GitHub): ")
 				if err := vault.AddToken(name, tok, tType); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "4":
-				fmt.Print("Note Name: ")
-				name := readInput()
+				name := promptLine("Note Name: ")
 				content, err := captureNoteContent(vault, name, "")
 				if err != nil {
 					color.Red("Note creation canceled: %v\n", err)
@@ -485,19 +457,15 @@ func main() {
 					return
 				}
 			case "5":
-				fmt.Print("Label: ")
-				name := readInput()
-				fmt.Print("Service: ")
-				svc := readInput()
-				fmt.Print("API Key: ")
-				key := readInput()
+				name := promptLine("Label: ")
+				svc := promptLine("Service: ")
+				key := promptLine("API Key: ")
 				if err := vault.AddAPIKey(name, svc, key); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "6":
-				fmt.Print("Key Label: ")
-				name := readInput()
+				name := promptLine("Key Label: ")
 				fmt.Println("Enter Private Key (end with empty line):")
 				var keyLines []string
 				for {
@@ -512,14 +480,10 @@ func main() {
 					return
 				}
 			case "7":
-				fmt.Print("SSID: ")
-				ssid := readInput()
-				fmt.Print("Password: ")
-				pass := readInput()
-				fmt.Print("Security (WPA2/WPA3): ")
-				sec := readInput()
-				fmt.Print("Router IP: ")
-				rip := readInput()
+				ssid := promptLine("SSID: ")
+				pass := promptLine("Password: ")
+				sec := promptLine("Security (WPA2/WPA3): ")
+				rip := promptLine("Router IP: ")
 				if err := vault.AddWiFi(ssid, pass, sec); err == nil {
 					for i, w := range vault.WiFiCredentials {
 						if w.SSID == ssid {
@@ -531,8 +495,7 @@ func main() {
 					return
 				}
 			case "8":
-				fmt.Print("Service: ")
-				svc := readInput()
+				svc := promptLine("Service: ")
 				fmt.Println("Enter Codes (one per line, end with empty line):")
 				var codes []string
 				for {
@@ -547,12 +510,9 @@ func main() {
 					return
 				}
 			case "9":
-				fmt.Print("Label: ")
-				label := readInput()
-				fmt.Print("Issuer: ")
-				issuer := readInput()
-				fmt.Print("Expiry Date (YYYY-MM-DD): ")
-				expiryStr := readInput()
+				label := promptLine("Label: ")
+				issuer := promptLine("Issuer: ")
+				expiryStr := promptLine("Expiry Date (YYYY-MM-DD): ")
 				expiry, err := time.Parse("2006-01-02", expiryStr)
 				if err != nil {
 					color.Red("Invalid date format. Use YYYY-MM-DD.\n")
@@ -581,35 +541,25 @@ func main() {
 					return
 				}
 			case "10":
-				fmt.Print("Label: ")
-				label := readInput()
-				fmt.Print("Type (Card/IBAN/SWIFT): ")
-				bType := readInput()
-				fmt.Print("Details (Number/IBAN): ")
-				details := readInput()
-				fmt.Print("CVV (blank if none): ")
-				cvv := readInput()
-				fmt.Print("Expiry (MM/YY, blank if none): ")
-				exp := readInput()
+				label := promptLine("Label: ")
+				bType := promptLine("Type (Card/IBAN/SWIFT): ")
+				details := promptLine("Details (Number/IBAN): ")
+				cvv := promptLine("CVV (blank if none): ")
+				exp := promptLine("Expiry (MM/YY, blank if none): ")
 				if err := vault.AddBankingItem(label, bType, details, cvv, exp); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "11":
-				fmt.Print("Document Name: ")
-				name := readInput()
-				fmt.Print("Path to File: ")
-				path := readInput()
+				name := promptLine("Document Name: ")
+				path := promptLine("Path to File: ")
 				content, err := os.ReadFile(path)
 				if err != nil {
 					color.Red("Error reading file: %v\n", err)
 					return
 				}
-				fmt.Print("Create a password for this document: ")
-				docPass, _ := readPassword()
-				fmt.Println()
-				fmt.Print("Tags (comma separated): ")
-				tagsRaw := readInput()
+				docPass, _ := promptPassword("Create a password for this document: ")
+				tagsRaw := promptLine("Tags (comma separated): ")
 				var tags []string
 				if tagsRaw != "" {
 					tags = strings.Split(tagsRaw, ",")
@@ -617,125 +567,86 @@ func main() {
 						tags[i] = strings.TrimSpace(tags[i])
 					}
 				}
-				fmt.Print("Expiry Date (e.g. YYYY-MM-DD, blank if none): ")
-				exp := readInput()
+				exp := promptLine("Expiry Date (e.g. YYYY-MM-DD, blank if none): ")
 				if err := vault.AddDocument(name, filepath.Base(path), content, docPass, tags, exp); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 				color.HiYellow("Document stored successfully and safely. Please delete the original file: %s\n", path)
 			case "12":
-				fmt.Print("Type (Passport/Driver's License/Voter ID): ")
-				tType := readInput()
-				fmt.Print("ID Number: ")
-				num := readInput()
-				fmt.Print("Full Name: ")
-				name := readInput()
-				fmt.Print("Expiry Date: ")
-				exp := readInput()
+				tType := promptLine("Type (Passport/Driver's License/Voter ID): ")
+				num := promptLine("ID Number: ")
+				name := promptLine("Full Name: ")
+				exp := promptLine("Expiry Date: ")
 				if err := vault.AddGovID(src.GovIDEntry{Type: tType, IDNumber: num, Name: name, Expiry: exp}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "13":
-				fmt.Print("Label: ")
-				label := readInput()
-				fmt.Print("Insurance ID: ")
-				iid := readInput()
-				fmt.Print("Prescriptions: ")
-				pres := readInput()
-				fmt.Print("Allergies: ")
-				all := readInput()
+				label := promptLine("Label: ")
+				iid := promptLine("Insurance ID: ")
+				pres := promptLine("Prescriptions: ")
+				all := promptLine("Allergies: ")
 				if err := vault.AddMedicalRecord(src.MedicalRecordEntry{Label: label, InsuranceID: iid, Prescriptions: pres, Allergies: all}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "14":
-				fmt.Print("Label: ")
-				label := readInput()
-				fmt.Print("Ticket Number: ")
-				tick := readInput()
-				fmt.Print("Booking Code: ")
-				code := readInput()
-				fmt.Print("Loyalty Program: ")
-				loy := readInput()
+				label := promptLine("Label: ")
+				tick := promptLine("Ticket Number: ")
+				code := promptLine("Booking Code: ")
+				loy := promptLine("Loyalty Program: ")
 				if err := vault.AddTravelDoc(src.TravelEntry{Label: label, TicketNumber: tick, BookingCode: code, LoyaltyProgram: loy}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "15":
-				fmt.Print("Name: ")
-				name := readInput()
-				fmt.Print("Phone: ")
-				phone := readInput()
-				fmt.Print("Email: ")
-				email := readInput()
-				fmt.Print("Address: ")
-				addr := readInput()
-				fmt.Print("Is Emergency Contact? (y/n): ")
-				em := strings.ToLower(readInput()) == "y"
+				name := promptLine("Name: ")
+				phone := promptLine("Phone: ")
+				email := promptLine("Email: ")
+				addr := promptLine("Address: ")
+				em := promptConfirm("Is Emergency Contact? (y/n): ", false)
 				if err := vault.AddContact(src.ContactEntry{Name: name, Phone: phone, Email: email, Address: addr, Emergency: em}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "16":
-				fmt.Print("Label: ")
-				label := readInput()
-				fmt.Print("Access Key: ")
-				ak := readInput()
-				fmt.Print("Secret Key: ")
-				sk := readInput()
-				fmt.Print("Region: ")
-				reg := readInput()
-				fmt.Print("Account ID: ")
-				aid := readInput()
-				fmt.Print("Role: ")
-				role := readInput()
-				fmt.Print("Expiration: ")
-				exp := readInput()
+				label := promptLine("Label: ")
+				ak := promptLine("Access Key: ")
+				sk := promptLine("Secret Key: ")
+				reg := promptLine("Region: ")
+				aid := promptLine("Account ID: ")
+				role := promptLine("Role: ")
+				exp := promptLine("Expiration: ")
 				if err := vault.AddCloudCredential(src.CloudCredentialEntry{Label: label, AccessKey: ak, SecretKey: sk, Region: reg, AccountID: aid, Role: role, Expiration: exp}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "17":
-				fmt.Print("Name: ")
-				name := readInput()
-				fmt.Print("Cluster URL: ")
-				url := readInput()
-				fmt.Print("Namespace: ")
-				ns := readInput()
-				fmt.Print("Expiration: ")
-				exp := readInput()
+				name := promptLine("Name: ")
+				url := promptLine("Cluster URL: ")
+				ns := promptLine("Namespace: ")
+				exp := promptLine("Expiration: ")
 				if err := vault.AddK8sSecret(src.K8sSecretEntry{Name: name, ClusterURL: url, K8sNamespace: ns, Expiration: exp}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "18":
-				fmt.Print("Name: ")
-				name := readInput()
-				fmt.Print("Registry URL: ")
-				url := readInput()
-				fmt.Print("Username: ")
-				user := readInput()
-				fmt.Print("Token: ")
-				tok := readInput()
+				name := promptLine("Name: ")
+				url := promptLine("Registry URL: ")
+				user := promptLine("Username: ")
+				tok := promptLine("Token: ")
 				if err := vault.AddDockerRegistry(src.DockerRegistryEntry{Name: name, RegistryURL: url, Username: user, Token: tok}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "19":
-				fmt.Print("Alias: ")
-				alias := readInput()
-				fmt.Print("Host: ")
-				host := readInput()
-				fmt.Print("User: ")
-				user := readInput()
-				fmt.Print("Port: ")
-				port := readInput()
-				fmt.Print("Key Path: ")
-				kp := readInput()
-				fmt.Print("Fingerprint: ")
-				fp := readInput()
+				alias := promptLine("Alias: ")
+				host := promptLine("Host: ")
+				user := promptLine("User: ")
+				port := promptLine("Port: ")
+				kp := promptLine("Key Path: ")
+				fp := promptLine("Fingerprint: ")
 				fmt.Println("Enter Private Key (end with empty line):")
 				var pkLines []string
 				for {
@@ -750,47 +661,34 @@ func main() {
 					return
 				}
 			case "20":
-				fmt.Print("Name: ")
-				name := readInput()
-				fmt.Print("Webhook URL: ")
-				wh := readInput()
-				fmt.Print("Environment Variables (comma separated): ")
-				ev := readInput()
+				name := promptLine("Name: ")
+				wh := promptLine("Webhook URL: ")
+				ev := promptLine("Environment Variables (comma separated): ")
 				if err := vault.AddCICDSecret(src.CICDSecretEntry{Name: name, Webhook: wh, EnvVars: ev}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "21":
-				fmt.Print("Product Name: ")
-				prod := readInput()
-				fmt.Print("Serial Key: ")
-				key := readInput()
-				fmt.Print("Activation Info: ")
-				act := readInput()
-				fmt.Print("Expiration: ")
-				exp := readInput()
+				prod := promptLine("Product Name: ")
+				key := promptLine("Serial Key: ")
+				act := promptLine("Activation Info: ")
+				exp := promptLine("Expiration: ")
 				if err := vault.AddSoftwareLicense(src.SoftwareLicenseEntry{ProductName: prod, SerialKey: key, ActivationInfo: act, Expiration: exp}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "22":
-				fmt.Print("Name: ")
-				name := readInput()
-				fmt.Print("Summary: ")
-				sum := readInput()
-				fmt.Print("Parties Involved: ")
-				part := readInput()
-				fmt.Print("Signed Date: ")
-				date := readInput()
+				name := promptLine("Name: ")
+				sum := promptLine("Summary: ")
+				part := promptLine("Parties Involved: ")
+				date := promptLine("Signed Date: ")
 				if err := vault.AddLegalContract(src.LegalContractEntry{Name: name, Summary: sum, PartiesInvolved: part, SignedDate: date}); err != nil {
 					color.Red("Error: %v\n", err)
 					return
 				}
 			case "23":
-				fmt.Print("Audio Name: ")
-				name := readInput()
-				fmt.Print("Path to File: ")
-				path := readInput()
+				name := promptLine("Audio Name: ")
+				path := promptLine("Path to File: ")
 				content, err := os.ReadFile(path)
 				if err != nil {
 					color.Red("Error reading file: %v\n", err)
@@ -802,10 +700,8 @@ func main() {
 				}
 				color.HiYellow("Audio stored successfully.\n")
 			case "24":
-				fmt.Print("Video Name: ")
-				name := readInput()
-				fmt.Print("Path to File: ")
-				path := readInput()
+				name := promptLine("Video Name: ")
+				path := promptLine("Path to File: ")
 				content, err := os.ReadFile(path)
 				if err != nil {
 					color.Red("Error reading file: %v\n", err)
@@ -817,10 +713,8 @@ func main() {
 				}
 				color.HiYellow("Video stored successfully.\n")
 			case "25":
-				fmt.Print("Photo Name: ")
-				name := readInput()
-				fmt.Print("Path to File: ")
-				path := readInput()
+				name := promptLine("Photo Name: ")
+				path := promptLine("Path to File: ")
 				content, err := os.ReadFile(path)
 				if err != nil {
 					color.Red("Error reading file: %v\n", err)
@@ -1462,8 +1356,7 @@ func main() {
 		Use:   "compromise",
 		Short: "EMERGENCY: Permanently delete the vault",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Print("WARNING: PERMANENTLY DELETE VAULT? Type 'DESTROY': ")
-			if readInput() != "DESTROY" {
+			if promptLine("WARNING: PERMANENTLY DELETE VAULT? Type 'DESTROY': ") != "DESTROY" {
 				return
 			}
 			if src.VaultExists(vaultPath) {
@@ -1615,8 +1508,7 @@ func main() {
 				fmt.Println("2. GitHub")
 				fmt.Println("3. Dropbox")
 				fmt.Println("4. All")
-				fmt.Print("Selection (1/2/3/4): ")
-				choice := readInput()
+				choice := promptLine("Selection (1/2/3/4): ")
 				if choice == "1" {
 					provider = "gdrive"
 				} else if choice == "2" {
@@ -1847,8 +1739,7 @@ func main() {
 			}
 
 			if len(args) == 0 {
-				fmt.Print("Enter Provider (gdrive|github|dropbox) [gdrive]: ")
-				pInput := strings.TrimSpace(readInput())
+				pInput := strings.TrimSpace(promptLine("Enter Provider (gdrive|github|dropbox) [gdrive]: "))
 				if pInput != "" {
 					provider = strings.ToLower(pInput)
 				}
@@ -1861,8 +1752,7 @@ func main() {
 				if len(args) > 1 {
 					key = strings.TrimSpace(args[1])
 				} else {
-					fmt.Print("Enter GitHub Repo (owner/repo): ")
-					key = strings.TrimSpace(readInput())
+					key = strings.TrimSpace(promptLine("Enter GitHub Repo (owner/repo): "))
 				}
 				if key == "" {
 					color.Red("Missing GitHub repo. Use owner/repo.")
@@ -1874,8 +1764,7 @@ func main() {
 						fmt.Println("Choose authentication type:")
 						fmt.Println("1. Personal Access Token")
 						fmt.Println("2. OAuth2 Access Token")
-						fmt.Print("Selection (1/2) [1]: ")
-						choice := strings.TrimSpace(readInput())
+						choice := strings.TrimSpace(promptLine("Selection (1/2) [1]: "))
 						if choice == "2" {
 							authMode = "oauth2"
 						} else {
@@ -1893,7 +1782,6 @@ func main() {
 						color.Red("Error reading token: %v", err)
 						return
 					}
-					fmt.Println()
 				}
 
 				gm, err := src.NewGitHubManager(context.Background(), tokenInput)
@@ -1926,7 +1814,6 @@ func main() {
 						color.Red("Error reading retrieval key: %v", err)
 						return
 					}
-					fmt.Println()
 				}
 				if key == "" {
 					color.Red("A retrieval key or direct cloud file identifier is required.")
@@ -1947,8 +1834,7 @@ func main() {
 					fmt.Println("Choose Sync Mode for Retrieval:")
 					fmt.Println("1. APM_PUBLIC")
 					fmt.Println("2. OAuth2 Self-Hosted")
-					fmt.Print("Selection (1/2) [1]: ")
-					modeSelection := strings.TrimSpace(readInput())
+					modeSelection := strings.TrimSpace(promptLine("Selection (1/2) [1]: "))
 					if modeSelection == "2" {
 						authMode = "oauth2"
 					}
@@ -1971,8 +1857,7 @@ func main() {
 					fmt.Println("Choose Sync Mode for Retrieval:")
 					fmt.Println("1. APM_PUBLIC")
 					fmt.Println("2. OAuth2 Self-Hosted (Access Token)")
-					fmt.Print("Selection (1/2) [1]: ")
-					modeSelection := strings.TrimSpace(readInput())
+					modeSelection := strings.TrimSpace(promptLine("Selection (1/2) [1]: "))
 					if modeSelection == "2" {
 						authMode = "oauth2"
 					}
@@ -1986,7 +1871,6 @@ func main() {
 						color.Red("Error reading Dropbox token: %v", tokenErr)
 						return
 					}
-					fmt.Println()
 					syncMode = "self_hosted"
 				}
 				cp, err = src.GetCloudProvider("dropbox", context.Background(), nil, []byte(tokenInput), syncMode)
@@ -2064,8 +1948,7 @@ func main() {
 			fmt.Println("1. Merge all remote changes")
 			fmt.Println("2. Select specific changes")
 			fmt.Println("3. Cancel")
-			fmt.Print("Selection (1/2/3): ")
-			choice := strings.TrimSpace(readInput())
+			choice := strings.TrimSpace(promptLine("Selection (1/2/3): "))
 			if choice == "3" || choice == "" {
 				color.Yellow("Cloud diff closed. Local vault unchanged.")
 				return
@@ -2079,8 +1962,7 @@ func main() {
 					selected[i] = i
 				}
 			case "2":
-				fmt.Print("Enter change numbers to merge (e.g. 1,3-5 or all): ")
-				rawSelection := strings.TrimSpace(readInput())
+				rawSelection := strings.TrimSpace(promptLine("Enter change numbers to merge (e.g. 1,3-5 or all): "))
 				selected, err = parseCloudDiffSelection(rawSelection, len(changes))
 				if err != nil {
 					color.Red("Invalid selection: %v", err)
@@ -2187,8 +2069,7 @@ func main() {
 			}
 
 			fmt.Printf("This will clear all local cloud metadata (Retrieval Key, Tokens, etc).\n")
-			fmt.Print("Are you sure? (y/n): ")
-			if strings.ToLower(readInput()) != "y" {
+			if !promptConfirm("Are you sure? (y/n): ", false) {
 				return
 			}
 
@@ -2278,13 +2159,11 @@ func main() {
 			if !src.VaultExists(vaultPath) {
 				color.Cyan("No vault detected. Creating a new vault.")
 				for {
-					fmt.Print("Create Master Password: ")
-					masterPassword, err = readPassword()
+					masterPassword, err = promptPassword("Create Master Password: ")
 					if err != nil {
 						color.Red("Error reading password: %v", err)
 						return
 					}
-					fmt.Println()
 					if err := src.ValidateMasterPassword(masterPassword); err != nil {
 						color.Red("Invalid password: %v", err)
 						continue
@@ -2296,11 +2175,8 @@ func main() {
 				selectedProfile := recommended
 				fmt.Printf("System recommended profile: %s (%s)\n", recommended, reason)
 				if !nonInteractive {
-					fmt.Printf("Use '%s'? (Y/n): ", recommended)
-					answer := strings.ToLower(strings.TrimSpace(readInput()))
-					if answer == "n" || answer == "no" {
-						fmt.Printf("Choose profile [%s] (%s): ", recommended, strings.Join(src.GetAvailableProfiles(), ", "))
-						choice := strings.ToLower(strings.TrimSpace(readInput()))
+					if !promptConfirm(fmt.Sprintf("Use '%s'? (Y/n): ", recommended), true) {
+						choice := strings.ToLower(strings.TrimSpace(promptLine(fmt.Sprintf("Choose profile [%s] (%s): ", recommended, strings.Join(src.GetAvailableProfiles(), ", ")))))
 						if _, ok := src.Profiles[choice]; ok {
 							selectedProfile = choice
 						} else if choice != "" {
@@ -2356,10 +2232,8 @@ func main() {
 			fmt.Printf("Current profile: %s\n", currentProfile)
 			fmt.Printf("Recommended for this system: %s (%s)\n", recommended, reason)
 			if !nonInteractive {
-				fmt.Print("Would you like to switch profile now? (y/n) [n]: ")
-				if strings.ToLower(strings.TrimSpace(readInput())) == "y" {
-					fmt.Printf("Choose profile [%s] (%s): ", recommended, strings.Join(src.GetAvailableProfiles(), ", "))
-					target := strings.ToLower(strings.TrimSpace(readInput()))
+				if promptConfirm("Would you like to switch profile now? (y/n) [n]: ", false) {
+					target := strings.ToLower(strings.TrimSpace(promptLine(fmt.Sprintf("Choose profile [%s] (%s): ", recommended, strings.Join(src.GetAvailableProfiles(), ", ")))))
 					if target == "" {
 						target = recommended
 					}
@@ -2380,8 +2254,7 @@ func main() {
 			}
 			fmt.Printf("Current spaces: %s\n", strings.Join(vault.Spaces, ", "))
 			if !nonInteractive {
-				fmt.Print("Add spaces now? Enter comma-separated names (or leave blank): ")
-				rawSpaces := strings.TrimSpace(readInput())
+				rawSpaces := strings.TrimSpace(promptLine("Add spaces now? Enter comma-separated names (or leave blank): "))
 				if rawSpaces != "" {
 					for _, part := range strings.Split(rawSpaces, ",") {
 						name := strings.TrimSpace(part)
@@ -2400,8 +2273,7 @@ func main() {
 						}
 					}
 				}
-				fmt.Printf("Set active space (%s) [default]: ", strings.Join(vault.Spaces, ", "))
-				targetSpace := strings.TrimSpace(readInput())
+				targetSpace := strings.TrimSpace(promptLine(fmt.Sprintf("Set active space (%s) [default]: ", strings.Join(vault.Spaces, ", "))))
 				if targetSpace == "" || strings.EqualFold(targetSpace, "default") {
 					vault.CurrentSpace = ""
 				} else {
@@ -2424,15 +2296,13 @@ func main() {
 			color.Yellow("[%d/%d] Cloud sync setup", step, totalSteps)
 			step++
 			if !nonInteractive {
-				fmt.Print("Configure cloud sync now? (y/n) [n]: ")
-				if strings.ToLower(strings.TrimSpace(readInput())) == "y" {
+				if promptConfirm("Configure cloud sync now? (y/n) [n]: ", false) {
 					fmt.Println("Choose Cloud Provider:")
 					fmt.Println("1. Google Drive")
 					fmt.Println("2. GitHub")
 					fmt.Println("3. Dropbox")
 					fmt.Println("4. All")
-					fmt.Print("Selection (1/2/3/4): ")
-					choice := strings.TrimSpace(readInput())
+					choice := strings.TrimSpace(promptLine("Selection (1/2/3/4): "))
 					switch choice {
 					case "1":
 						if err := setupGDrive(vault, masterPassword); err != nil {
@@ -2706,8 +2576,7 @@ func main() {
 			}
 
 			fmt.Println("Edit profile values (press Enter to keep defaults)")
-			fmt.Printf("Profile name [%s]: ", suggestedName)
-			chosenName := strings.TrimSpace(readInput())
+			chosenName := strings.TrimSpace(promptLine(fmt.Sprintf("Profile name [%s]: ", suggestedName)))
 			if chosenName == "" {
 				chosenName = suggestedName
 			}
@@ -2780,8 +2649,7 @@ func main() {
 			fmt.Println("Explanation: The amount of RAM required to derive your encryption keys.")
 			fmt.Println("Security: Higher memory cost protects against GPU/ASIC brute-force attacks.")
 			fmt.Println("Tip: 64MB is standard. 256MB+ is hardened. Use what your system can comfortably spare.")
-			fmt.Print("Memory (MB) [64]: ")
-			memStr := readInput()
+			memStr := promptLine("Memory (MB) [64]: ")
 			mem := uint32(64)
 			if memStr != "" {
 				_, _ = fmt.Sscanf(memStr, "%d", &mem)
@@ -2791,8 +2659,7 @@ func main() {
 			fmt.Println("Explanation: The number of times the hashing function is repeated.")
 			fmt.Println("Security: More iterations mean a slower hash, making brute-force much slower.")
 			fmt.Println("Tip: 3 is standard. Increase this if you want the 'unlock' process to take longer (more secure).")
-			fmt.Print("Time (Iterations) [3]: ")
-			timeStr := readInput()
+			timeStr := promptLine("Time (Iterations) [3]: ")
 			t := uint32(3)
 			if timeStr != "" {
 				_, _ = fmt.Sscanf(timeStr, "%d", &t)
@@ -2802,8 +2669,7 @@ func main() {
 			fmt.Println("Explanation: The number of CPU threads used during key derivation.")
 			fmt.Println("Security: Typically matched to your CPU's core count.")
 			fmt.Println("Tip: 2-4 is usually ideal. Higher values don't necessarily increase security but use more CPU power.")
-			fmt.Print("Parallelism [2]: ")
-			parStr := readInput()
+			parStr := promptLine("Parallelism [2]: ")
 			p := uint8(2)
 			if parStr != "" {
 				_, _ = fmt.Sscanf(parStr, "%d", &p)
@@ -2813,8 +2679,7 @@ func main() {
 			fmt.Println("Explanation: Random data added to your password before hashing.")
 			fmt.Println("Security: Prevents 'Rainbow Table' attacks where pre-computed hashes are used.")
 			fmt.Println("Tip: 16 bytes is standard. 32 bytes is very secure. Increasing this has negligible performance hit.")
-			fmt.Print("Salt Length (Bytes) [16]: ")
-			saltLenStr := readInput()
+			saltLenStr := promptLine("Salt Length (Bytes) [16]: ")
 			saltLen := 16
 			if saltLenStr != "" {
 				_, _ = fmt.Sscanf(saltLenStr, "%d", &saltLen)
@@ -2833,8 +2698,7 @@ func main() {
 			if cipherName == src.CipherXChaCha20Poly1305 {
 				defaultNonce = 24
 			}
-			fmt.Printf("Nonce Length (Bytes) [%d]: ", defaultNonce)
-			nonceLenStr := readInput()
+			nonceLenStr := promptLine(fmt.Sprintf("Nonce Length (Bytes) [%d]: ", defaultNonce))
 			nonceLen := defaultNonce
 			if nonceLenStr != "" {
 				_, _ = fmt.Sscanf(nonceLenStr, "%d", &nonceLen)
@@ -3118,9 +2982,7 @@ func main() {
 			}
 
 			if !autoYes {
-				fmt.Print("\n  Apply auto-fixes? (y/n): ")
-				answer := readInput()
-				if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+				if !promptConfirm("\n  Apply auto-fixes? (y/n): ", false) {
 					color.Yellow("  Cleanup cancelled.\n")
 					return
 				}
@@ -3345,15 +3207,11 @@ func chooseProfileForInit() string {
 	}
 	fmt.Println()
 	fmt.Printf("Recommended profile: %s (%s)\n", recommended, reason)
-	fmt.Printf("Use '%s'? (Y/n): ", recommended)
-
-	answer := strings.ToLower(strings.TrimSpace(readInput()))
-	if answer == "" || answer == "y" || answer == "yes" {
+	if promptConfirm(fmt.Sprintf("Use '%s'? (Y/n): ", recommended), true) {
 		return recommended
 	}
 
-	fmt.Printf("Choose profile [%s] (%s): ", recommended, strings.Join(src.GetAvailableProfiles(), ", "))
-	choice := strings.ToLower(strings.TrimSpace(readInput()))
+	choice := strings.ToLower(strings.TrimSpace(promptLine(fmt.Sprintf("Choose profile [%s] (%s): ", recommended, strings.Join(src.GetAvailableProfiles(), ", ")))))
 	if choice == "" {
 		return recommended
 	}
@@ -3410,8 +3268,7 @@ func readCipherWithDefault(label, defaultVal string) string {
 	if defaultVal == "" {
 		defaultVal = src.CipherAESGCM
 	}
-	fmt.Printf("%s [%s]: ", label, defaultVal)
-	raw := strings.TrimSpace(readInput())
+	raw := strings.TrimSpace(promptLine(fmt.Sprintf("%s [%s]: ", label, defaultVal)))
 	if raw == "" {
 		return defaultVal
 	}
@@ -3424,8 +3281,7 @@ func readCipherWithDefault(label, defaultVal string) string {
 }
 
 func readUint32WithDefault(label string, defaultVal uint32) uint32 {
-	fmt.Printf("%s [%d]: ", label, defaultVal)
-	raw := strings.TrimSpace(readInput())
+	raw := strings.TrimSpace(promptLine(fmt.Sprintf("%s [%d]: ", label, defaultVal)))
 	if raw == "" {
 		return defaultVal
 	}
@@ -3438,8 +3294,7 @@ func readUint32WithDefault(label string, defaultVal uint32) uint32 {
 }
 
 func readUint8WithDefault(label string, defaultVal uint8) uint8 {
-	fmt.Printf("%s [%d]: ", label, defaultVal)
-	raw := strings.TrimSpace(readInput())
+	raw := strings.TrimSpace(promptLine(fmt.Sprintf("%s [%d]: ", label, defaultVal)))
 	if raw == "" {
 		return defaultVal
 	}
@@ -3452,8 +3307,7 @@ func readUint8WithDefault(label string, defaultVal uint8) uint8 {
 }
 
 func readIntWithDefault(label string, defaultVal int) int {
-	fmt.Printf("%s [%d]: ", label, defaultVal)
-	raw := strings.TrimSpace(readInput())
+	raw := strings.TrimSpace(promptLine(fmt.Sprintf("%s [%d]: ", label, defaultVal)))
 	if raw == "" {
 		return defaultVal
 	}
@@ -3463,11 +3317,6 @@ func readIntWithDefault(label string, defaultVal int) int {
 		return defaultVal
 	}
 	return parsed
-}
-
-func readInput() string {
-	input, _ := inputReader.ReadString('\n')
-	return strings.TrimSpace(input)
 }
 
 func truncateText(s string, max int) string {
@@ -3612,21 +3461,6 @@ func setAPMEmailBody(msg *gomail.Message, title string, paragraphs []string, cod
 </body>
 </html>`)
 	msg.AddAlternative("text/html", htmlBuilder.String())
-}
-
-func readPassword() (string, error) {
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(string(bytePassword)), nil
-	}
-	input := readInput()
-	if input == "" {
-		return "", fmt.Errorf("EOF or empty input")
-	}
-	return input, nil
 }
 
 func copyToClipboardWithExpiry(text string) {
@@ -3777,12 +3611,10 @@ func unlockVaultCredentials() (string, *src.Vault, bool, error) {
 				return "", nil, false, fmt.Errorf("vault permanently locked due to suspected breach")
 			}
 
-			fmt.Printf("Master Password (attempt %d/3): ", i+1)
-			pass, err := readPassword()
+			pass, err := promptPassword(fmt.Sprintf("Master Password (attempt %d/3): ", i+1))
 			if err != nil {
 				return "", nil, false, err
 			}
-			fmt.Println()
 
 			src.TrackFailure()
 			decoy := defaultLockPolicy()
@@ -3808,12 +3640,10 @@ func unlockVaultCredentials() (string, *src.Vault, bool, error) {
 		}
 
 		if pass == "" {
-			fmt.Printf("Master Password (attempt %d/3): ", i+1)
-			pass, err = readPassword()
+			pass, err = promptPassword(fmt.Sprintf("Master Password (attempt %d/3): ", i+1))
 			if err != nil {
 				return "", nil, false, err
 			}
-			fmt.Println()
 		}
 
 		vault, err := src.DecryptVault(data, pass, costMultiplier)
@@ -3824,9 +3654,7 @@ func unlockVaultCredentials() (string, *src.Vault, bool, error) {
 		// master-password change — create once, read afterwards.
 		if err != nil && usedTouchID {
 			color.Yellow("\n  Touch ID password is outdated. Run 'pm auth touchid setup' to refresh it.\n")
-			fmt.Printf("  Master Password: ")
-			newPass, rErr := readPassword()
-			fmt.Println()
+			newPass, rErr := promptPassword(fmt.Sprintf("  Master Password: "))
 			if rErr == nil {
 				if newVault, dErr := src.DecryptVault(data, newPass, costMultiplier); dErr == nil {
 					pass = newPass
@@ -3934,12 +3762,13 @@ func rankMatch(query, target string) int {
 }
 
 func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string, readonly, showPass bool) {
-	query := initialQuery
+	query := []rune(initialQuery)
+	cursor := len(query)
 	selectedIndex := 0
 	selectedItems := make(map[string]src.SearchResult)
 
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		results := performSearch(v, query)
+	if !tty.Interactive() {
+		results := performSearch(v, string(query))
 		if len(results) == 0 {
 			fmt.Println("No matching entries found.")
 			return
@@ -3955,28 +3784,66 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 		return
 	}
 
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
+	screen := &rawScreen{}
+	if err := screen.enter(); err != nil {
 		fmt.Printf("Error entering raw mode: %v\n", err)
 		return
 	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
+	defer screen.leave()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		term.Restore(int(os.Stdin.Fd()), oldState)
-		os.Exit(0)
-	}()
+	const (
+		focusSearch = 0
+		focusList   = 1
+	)
+	const displayLimit = 20
+	focusMode := focusSearch
 
-	focusMode := 0
+	// Editing the query always moves the focus to it and starts the list over.
+	edited := func() {
+		selectedIndex = 0
+		focusMode = focusSearch
+	}
+	insert := func(rs []rune) {
+		if len(rs) == 0 {
+			return
+		}
+		q := make([]rune, 0, len(query)+len(rs))
+		q = append(q, query[:cursor]...)
+		q = append(q, rs...)
+		query = append(q, query[cursor:]...)
+		cursor += len(rs)
+		edited()
+	}
+	deleteRange := func(from, to int) {
+		from, to = max(from, 0), min(to, len(query))
+		if from >= to {
+			return
+		}
+		query = append(query[:from:from], query[to:]...)
+		cursor = from
+		edited()
+	}
+	wordLeft := func() int {
+		i := cursor
+		for i > 0 && unicode.IsSpace(query[i-1]) {
+			i--
+		}
+		for i > 0 && !unicode.IsSpace(query[i-1]) {
+			i--
+		}
+		return i
+	}
+	selectionKey := func(r src.SearchResult) string { return fmt.Sprintf("%s:%s", r.Type, r.Identifier) }
+
 	for {
 		look := newItemLookup(v)
-		results := searchItems(look, query)
+		results := searchItems(look, string(query))
 		if len(results) > 0 {
 			if selectedIndex >= len(results) {
 				selectedIndex = len(results) - 1
+			}
+			if selectedIndex < 0 {
+				selectedIndex = 0
 			}
 		} else {
 			selectedIndex = 0
@@ -3990,14 +3857,17 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 		fmt.Print("\033[H\033[J")
 		fmt.Printf("\x1b[1;36mAPM Search & Manage\x1b[0m | Space: \x1b[1;32m%s\x1b[0m (readonly: %v)\r\n", profileDisplay, readonly)
 
-		if focusMode == 0 {
-			fmt.Printf("\x1b[1;33mQuery:\x1b[0m \x1b[1;37m%s\x1b[5m_\x1b[0m\r\n", query)
+		if focusMode == focusSearch {
+			at, after := " ", ""
+			if cursor < len(query) {
+				at, after = string(query[cursor]), string(query[cursor+1:])
+			}
+			fmt.Printf("\x1b[1;33mQuery:\x1b[0m \x1b[1;37m%s\x1b[7m%s\x1b[27m%s\x1b[0m\r\n", string(query[:cursor]), at, after)
 		} else {
-			fmt.Printf("\x1b[1;33mQuery:\x1b[0m %s\r\n", query)
+			fmt.Printf("\x1b[1;33mQuery:\x1b[0m %s\r\n", string(query))
 		}
 		fmt.Print("\r--------------------------------------------------\r\n")
 
-		displayLimit := 20
 		start := 0
 		if len(results) > displayLimit {
 			if selectedIndex >= displayLimit {
@@ -4014,14 +3884,13 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 		}
 		for i := start; i < end; i++ {
 			r := results[i]
-			key := fmt.Sprintf("%s:%s", r.Type, r.Identifier)
 			prefix := "  "
-			if _, exists := selectedItems[key]; exists {
+			if _, exists := selectedItems[selectionKey(r)]; exists {
 				prefix = "* "
 			}
 			line := fmt.Sprintf("%s%s %s", prefix, resultIndex(i, len(results)), resultLine(look, r))
 			if i == selectedIndex {
-				if focusMode == 1 {
+				if focusMode == focusList {
 					fmt.Printf("\x1b[1;7m %s \x1b[0m \x1b[1;32m<-- PRESS E/D/V/SPACE/S\x1b[0m\r\n", line)
 				} else {
 					fmt.Printf("\x1b[1;7m %s \x1b[0m\r\n", line)
@@ -4036,200 +3905,198 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 		}
 
 		fmt.Print("\r\n\r--------------------------------------------------------------\r\n")
-		if focusMode == 0 {
-			fmt.Print("\r\x1b[1;37mType to Search\x1b[0m | \x1b[1;37mTab/Enter\x1b[0m: Focus List | \x1b[1;37mEsc\x1b[0m: Exit\r\n")
+		if focusMode == focusSearch {
+			fmt.Print("\r\x1b[1;37mType to Search\x1b[0m | \x1b[1;37m←→ Home/End\x1b[0m: Cursor | \x1b[1;37m^U\x1b[0m: Clear | \x1b[1;37m^W\x1b[0m: Word | \x1b[1;37m↑↓ PgUp/PgDn\x1b[0m: Navigate\r\n")
+			fmt.Print("\r\x1b[1;37mTab/Enter\x1b[0m: Focus List | \x1b[1;37mEsc\x1b[0m: Exit\r\n")
 		} else {
-			fmt.Print("\r\x1b[1;37mUp/Down\x1b[0m: Navigate | \x1b[1;37mSpace\x1b[0m: Quicklook | \x1b[1;37ms\x1b[0m: Select | \x1b[1;37ma\x1b[0m: All | \x1b[1;37mc\x1b[0m: Clear\r\n")
+			fmt.Print("\r\x1b[1;37m↑↓/j/k PgUp/PgDn Home/End\x1b[0m: Navigate | \x1b[1;37mSpace\x1b[0m: Quicklook | \x1b[1;37ms\x1b[0m: Select | \x1b[1;37ma\x1b[0m: All | \x1b[1;37mc\x1b[0m: Clear\r\n")
 			fmt.Print("\r\x1b[1;37mEnter/v\x1b[0m: View | \x1b[1;37mi\x1b[0m: Metadata | \x1b[1;37me\x1b[0m: Edit | \x1b[1;37md\x1b[0m: Delete | \x1b[1;37mEsc/Tab\x1b[0m: Focus Search\r\n")
 		}
 
-		b := make([]byte, 3)
-		n, err := os.Stdin.Read(b)
-		if err != nil || n == 0 {
+		k, err := tty.ReadKey()
+		if err != nil {
+			fmt.Print("\033[H\033[J")
+			if errors.Is(err, tty.ErrInterrupted) {
+				exitInterrupted()
+			}
 			break
 		}
 
-		// Windows consoles can emit extended key codes for arrows:
-		// Up: 224,72 and Down: 224,80 (sometimes 0,72 / 0,80).
-		if n >= 2 && (b[0] == 224 || b[0] == 0) {
-			if b[1] == 72 {
-				if selectedIndex > 0 {
-					selectedIndex--
-				}
-				continue
+		// act runs a sub-screen (view, edit, delete...) in cooked mode.
+		act := func(action byte) {
+			if len(results) == 0 {
+				return
 			}
-			if b[1] == 80 {
-				if selectedIndex < len(results)-1 {
-					selectedIndex++
-				}
-				continue
-			}
+			res := results[selectedIndex]
+			screen.cooked(func() { handleAction(v, masterPassword, res, action, readonly, showPass) })
 		}
+		inList := focusMode == focusList
+		plain := k.Type == tty.KeyRune && k.Mod&(tty.ModAlt|tty.ModCtrl|tty.ModMeta) == 0
 
-		if b[0] == 27 {
-			if n >= 3 && (b[1] == '[' || b[1] == 'O') {
-				if b[2] == 'A' {
-					if selectedIndex > 0 {
-						selectedIndex--
-					}
-					continue
-				} else if b[2] == 'B' {
-					if selectedIndex < len(results)-1 {
-						selectedIndex++
-					}
-					continue
-				}
+		switch {
+		case k.Type == tty.KeyResume, k.IsCtrl('l'):
+			// Redraw.
+		case k.Type == tty.KeyUp, inList && k.IsRune('k'), k.IsCtrl('p'):
+			if selectedIndex > 0 {
+				selectedIndex--
 			}
-			if n == 1 {
-				if focusMode == 1 {
-					focusMode = 0
-				} else {
-					break
-				}
+		case k.Type == tty.KeyDown, inList && k.IsRune('j'), k.IsCtrl('n'):
+			if selectedIndex < len(results)-1 {
+				selectedIndex++
 			}
-			continue
-		}
-
-		if b[0] == 3 || b[0] == 4 {
-			break
-		}
-
-		if b[0] == 9 {
-			if focusMode == 0 {
-				focusMode = 1
-			} else {
-				focusMode = 0
-			}
-			continue
-		}
-
-		if b[0] == 127 || b[0] == 8 {
-			if len(query) > 0 {
-				query = query[:len(query)-1]
-				selectedIndex = 0
-				focusMode = 0
-			}
-			continue
-		}
-
-		if b[0] == '\r' || b[0] == '\n' {
-			if focusMode == 0 {
-				focusMode = 1
-			} else if len(results) > 0 {
-				handleAction(v, masterPassword, results[selectedIndex], 'v', readonly, showPass, oldState)
-				oldState, _ = term.MakeRaw(int(os.Stdin.Fd()))
-			}
-			continue
-		}
-
-		if focusMode == 1 {
-			if b[0] == ' ' {
-				if len(results) > 0 {
-					handleAction(v, masterPassword, results[selectedIndex], 'q', readonly, showPass, oldState)
-					oldState, _ = term.MakeRaw(int(os.Stdin.Fd()))
-				}
-				continue
-			}
-			if b[0] == 's' || b[0] == 'S' {
-				if len(results) > 0 {
-					r := results[selectedIndex]
-					key := fmt.Sprintf("%s:%s", r.Type, r.Identifier)
-					if _, exists := selectedItems[key]; exists {
-						delete(selectedItems, key)
-					} else {
-						selectedItems[key] = r
-					}
-				}
-				continue
-			}
-			if b[0] == 'a' {
-				for _, r := range results {
-					key := fmt.Sprintf("%s:%s", r.Type, r.Identifier)
-					selectedItems[key] = r
-				}
-				continue
-			}
-			if b[0] == 'c' {
-				selectedItems = make(map[string]src.SearchResult)
-				continue
-			}
-			if b[0] == 'e' {
-				if len(selectedItems) > 0 {
-					_ = term.Restore(int(os.Stdin.Fd()), oldState)
-					for key, res := range selectedItems {
-						fmt.Print("\033[H\033[J")
-						editEntryInVault(v, masterPassword, res)
-						delete(selectedItems, key)
-						fmt.Print("\nPress Enter to continue...")
-						readInput()
-					}
-					oldState, _ = term.MakeRaw(int(os.Stdin.Fd()))
-				} else if len(results) > 0 {
-					handleAction(v, masterPassword, results[selectedIndex], 'e', readonly, showPass, oldState)
-					oldState, _ = term.MakeRaw(int(os.Stdin.Fd()))
-				}
-				continue
-			}
-			if b[0] == 'd' {
-				if len(selectedItems) > 0 {
-					_ = term.Restore(int(os.Stdin.Fd()), oldState)
-					fmt.Print("\033[H\033[J")
-					fmt.Printf("Are you sure you want to delete %d selected items? (y/n): ", len(selectedItems))
-					if strings.ToLower(readInput()) == "y" {
-						for key, res := range selectedItems {
-							if deleteEntryByResult(v, res) {
-								delete(selectedItems, key)
-							}
-						}
-						data, err := src.EncryptVault(v, masterPassword)
-						if err == nil {
-							err = src.SaveVault(vaultPath, data)
-						}
-						if err != nil {
-							cliSaveError(err)
-						} else {
-							color.Green("Bulk deletion complete.")
-						}
-						fmt.Print("\nPress Enter to continue...")
-						readInput()
-					}
-					oldState, _ = term.MakeRaw(int(os.Stdin.Fd()))
-				} else if len(results) > 0 {
-					handleAction(v, masterPassword, results[selectedIndex], 'd', readonly, showPass, oldState)
-					oldState, _ = term.MakeRaw(int(os.Stdin.Fd()))
-				}
-				continue
-			}
-			if b[0] == 'v' {
-				if len(results) > 0 {
-					handleAction(v, masterPassword, results[selectedIndex], 'v', readonly, showPass, oldState)
-					oldState, _ = term.MakeRaw(int(os.Stdin.Fd()))
-				}
-				continue
-			}
-			if b[0] == 'i' {
-				if len(selectedItems) > 0 {
-					_ = term.Restore(int(os.Stdin.Fd()), oldState)
-					for _, res := range selectedItems {
-						fmt.Print("\033[H\033[J")
-						displayEntryMetadata(v, res)
-						fmt.Print("\nPress Enter to continue...")
-						readInput()
-					}
-					oldState, _ = term.MakeRaw(int(os.Stdin.Fd()))
-				} else if len(results) > 0 {
-					handleAction(v, masterPassword, results[selectedIndex], 'i', readonly, showPass, oldState)
-					oldState, _ = term.MakeRaw(int(os.Stdin.Fd()))
-				}
-				continue
-			}
-		}
-
-		char := rune(b[0])
-		if unicode.IsPrint(char) {
-			query += string(char)
+		case k.Type == tty.KeyPgUp:
+			selectedIndex = max(selectedIndex-displayLimit, 0)
+		case k.Type == tty.KeyPgDn:
+			selectedIndex = max(min(selectedIndex+displayLimit, len(results)-1), 0)
+		case k.Type == tty.KeyHome && inList:
 			selectedIndex = 0
-			focusMode = 0
+		case k.Type == tty.KeyEnd && inList:
+			selectedIndex = max(len(results)-1, 0)
+		case k.Type == tty.KeyHome, k.IsCtrl('a') && !inList:
+			cursor = 0
+		case k.Type == tty.KeyEnd, k.IsCtrl('e') && !inList:
+			cursor = len(query)
+		case k.Type == tty.KeyLeft:
+			focusMode = focusSearch
+			if k.Mod&(tty.ModAlt|tty.ModCtrl|tty.ModMeta) != 0 {
+				cursor = wordLeft()
+			} else if cursor > 0 {
+				cursor--
+			}
+		case k.Type == tty.KeyRight:
+			focusMode = focusSearch
+			if k.Mod&(tty.ModAlt|tty.ModCtrl|tty.ModMeta) != 0 {
+				for cursor < len(query) && unicode.IsSpace(query[cursor]) {
+					cursor++
+				}
+				for cursor < len(query) && !unicode.IsSpace(query[cursor]) {
+					cursor++
+				}
+			} else if cursor < len(query) {
+				cursor++
+			}
+		case k.Type == tty.KeyTab, k.Type == tty.KeyShiftTab:
+			focusMode = 1 - focusMode
+		case k.Type == tty.KeyEnter:
+			if !inList {
+				focusMode = focusList
+			} else {
+				act('v')
+			}
+		case k.Type == tty.KeyEsc:
+			if !inList {
+				fmt.Print("\033[H\033[J")
+				return
+			}
+			focusMode = focusSearch
+		case k.IsCtrl('d'):
+			if len(query) == 0 {
+				fmt.Print("\033[H\033[J")
+				return
+			}
+			deleteRange(cursor, cursor+1)
+		case k.Type == tty.KeyBackspace:
+			if k.Mod&(tty.ModAlt|tty.ModCtrl|tty.ModMeta) != 0 {
+				deleteRange(wordLeft(), cursor)
+			} else {
+				deleteRange(cursor-1, cursor)
+			}
+		case k.Type == tty.KeyDelete:
+			deleteRange(cursor, cursor+1)
+		case k.IsCtrl('u'):
+			deleteRange(0, len(query))
+		case k.IsCtrl('k'):
+			deleteRange(cursor, len(query))
+		case k.IsCtrl('w'):
+			deleteRange(wordLeft(), cursor)
+		case k.Type == tty.KeyPaste:
+			var rs []rune
+			for _, r := range k.Paste {
+				switch {
+				case r == '\r' || r == '\n' || r == '\t':
+					rs = append(rs, ' ')
+				case unicode.IsPrint(r):
+					rs = append(rs, r)
+				}
+			}
+			insert([]rune(strings.TrimSpace(string(rs))))
+		case inList && k.IsRune(' '):
+			act('q')
+		case inList && (k.IsRune('s') || k.IsRune('S')):
+			if len(results) > 0 {
+				key := selectionKey(results[selectedIndex])
+				if _, exists := selectedItems[key]; exists {
+					delete(selectedItems, key)
+				} else {
+					selectedItems[key] = results[selectedIndex]
+				}
+			}
+		case inList && k.IsRune('a'):
+			for _, r := range results {
+				selectedItems[selectionKey(r)] = r
+			}
+		case inList && k.IsRune('c'):
+			selectedItems = make(map[string]src.SearchResult)
+		case inList && k.IsRune('e'):
+			if len(selectedItems) == 0 {
+				act('e')
+				break
+			}
+			screen.cooked(func() {
+				for key, res := range selectedItems {
+					fmt.Print("\033[H\033[J")
+					editEntryInVault(v, masterPassword, res)
+					delete(selectedItems, key)
+					pressEnterToContinue()
+				}
+			})
+		case inList && k.IsRune('d'):
+			if len(selectedItems) == 0 {
+				act('d')
+				break
+			}
+			screen.cooked(func() {
+				fmt.Print("\033[H\033[J")
+				if readonly {
+					color.Red("Vault is READ-ONLY.")
+					pressEnterToContinue()
+					return
+				}
+				if !promptConfirm(fmt.Sprintf("Are you sure you want to delete %d selected items? (y/n): ", len(selectedItems)), false) {
+					return
+				}
+				for key, res := range selectedItems {
+					if deleteEntryByResult(v, res) {
+						delete(selectedItems, key)
+					}
+				}
+				data, err := src.EncryptVault(v, masterPassword)
+				if err == nil {
+					err = src.SaveVault(vaultPath, data)
+				}
+				if err != nil {
+					cliSaveError(err)
+				} else {
+					color.Green("Bulk deletion complete.")
+				}
+				pressEnterToContinue()
+			})
+		case inList && k.IsRune('v'):
+			act('v')
+		case inList && k.IsRune('i'):
+			if len(selectedItems) == 0 {
+				act('i')
+				break
+			}
+			screen.cooked(func() {
+				for _, res := range selectedItems {
+					fmt.Print("\033[H\033[J")
+					displayEntryMetadata(v, res)
+					pressEnterToContinue()
+				}
+			})
+		case plain && unicode.IsPrint(k.Rune):
+			insert([]rune{k.Rune})
 		}
 	}
 
@@ -4412,7 +4279,7 @@ func runInteractiveTOTP(v *src.Vault, masterPassword string) {
 		return
 	}
 
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !tty.Interactive() {
 		for i, entry := range entries {
 			code, err := src.GenerateTOTP(entry.Secret)
 			if err != nil {
@@ -4423,35 +4290,41 @@ func runInteractiveTOTP(v *src.Vault, masterPassword string) {
 		return
 	}
 
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
+	screen := &rawScreen{}
+	if err := screen.enter(); err != nil {
 		color.Red("Failed to initialize interactive TOTP view: %v", err)
 		return
 	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
+	defer screen.leave()
 
 	fmt.Print("\x1b[?25l\r\n")
 	defer fmt.Print("\x1b[?25h")
 
-	inputCh := make(chan []byte, 16)
-	go func() {
-		for {
-			buf := make([]byte, 8)
-			n, err := os.Stdin.Read(buf)
-			if err != nil || n == 0 {
-				close(inputCh)
-				return
-			}
-			packet := make([]byte, n)
-			copy(packet, buf[:n])
-			inputCh <- packet
-		}
-	}()
-
 	selected := 0
 	status := ""
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
+	copyEntry := func(entry src.TOTPEntry) {
+		code, err := src.GenerateTOTP(entry.Secret)
+		if err != nil {
+			status = color.RedString("Failed to generate TOTP for %s", entry.Account)
+			return
+		}
+		copyToClipboard(code)
+		src.LogAction("TOTP_COPIED", fmt.Sprintf("Account: %s", entry.Account))
+		status = color.GreenString("Copied TOTP for %s", entry.Account)
+	}
+	move := func(entries []src.TOTPEntry, to int) {
+		entries[selected], entries[to] = entries[to], entries[selected]
+		if err := persistTOTPOrder(v, masterPassword, entries); err != nil {
+			status = color.RedString("Failed to save TOTP order: %v", err)
+			return
+		}
+		dir := "up"
+		if to > selected {
+			dir = "down"
+		}
+		selected = to
+		status = color.CyanString("Moved %s %s", entries[selected].Account, dir)
+	}
 
 	for {
 		entries = orderedTOTPEntries(v)
@@ -4469,7 +4342,7 @@ func runInteractiveTOTP(v *src.Vault, masterPassword string) {
 
 		fmt.Print("\033[H\033[J")
 		fmt.Printf("\rAPM TOTP | Space: %s | Refresh: %ds\r\n", currentSpaceDisplay(v), src.TimeRemaining())
-		fmt.Print("\rEnter: copy selected | 1-9: copy by number | Shift+Up/Down: reorder | Up/Down: move | q/Esc: exit\r\n")
+		fmt.Print("\rEnter: copy selected | 1-9: copy by number | Shift+Up/Down: reorder | Up/Down/Home/End: move | q/Esc: exit\r\n")
 		if status != "" {
 			fmt.Printf("\r%s\r\n", status)
 			status = ""
@@ -4487,85 +4360,58 @@ func runInteractiveTOTP(v *src.Vault, masterPassword string) {
 			fmt.Printf("\r%s [%d] %-26s %s%s\r\n", marker, i+1, entry.Account, code, totpSiteSuffix(v, entry.Account))
 		}
 
-		select {
-		case packet, ok := <-inputCh:
-			if !ok {
-				return
+		// Redraw at least once a second so the codes and countdown stay live.
+		k, ok, err := tty.ReadKeyTimeout(time.Second)
+		if err != nil {
+			fmt.Print("\x1b[?25h")
+			if errors.Is(err, tty.ErrInterrupted) {
+				exitInterrupted()
 			}
-
-			if len(packet) == 1 {
-				ch := packet[0]
-				switch ch {
-				case 'q', 'Q', 3, 4, 27:
-					return
-				case '\r', '\n':
-					entry := entries[selected]
-					code, err := src.GenerateTOTP(entry.Secret)
-					if err != nil {
-						status = color.RedString("Failed to generate TOTP for %s", entry.Account)
-						break
-					}
-					copyToClipboard(code)
-					src.LogAction("TOTP_COPIED", fmt.Sprintf("Account: %s", entry.Account))
-					status = color.GreenString("Copied TOTP for %s", entry.Account)
-				default:
-					if ch >= '1' && ch <= '9' {
-						idx := int(ch - '1')
-						if idx >= 0 && idx < len(entries) {
-							entry := entries[idx]
-							code, err := src.GenerateTOTP(entry.Secret)
-							if err != nil {
-								status = color.RedString("Failed to generate TOTP for %s", entry.Account)
-								break
-							}
-							copyToClipboard(code)
-							src.LogAction("TOTP_COPIED", fmt.Sprintf("Account: %s", entry.Account))
-							status = color.GreenString("Copied TOTP for %s", entry.Account)
-							selected = idx
-						}
-					}
-				}
-				continue
+			return
+		}
+		if !ok {
+			continue
+		}
+		shift := k.Mod&tty.ModShift != 0
+		switch {
+		case k.Type == tty.KeyEsc, k.IsRune('q'), k.IsRune('Q'), k.IsCtrl('d'):
+			return
+		case k.Type == tty.KeyEnter:
+			copyEntry(entries[selected])
+		case k.Type == tty.KeyRune && k.Mod == 0 && k.Rune >= '1' && k.Rune <= '9':
+			if idx := int(k.Rune - '1'); idx < len(entries) {
+				copyEntry(entries[idx])
+				selected = idx
 			}
-
-			sequence := string(packet)
-			switch {
-			case strings.Contains(sequence, "\x1b[1;2A"):
-				if selected > 0 {
-					entries[selected], entries[selected-1] = entries[selected-1], entries[selected]
-					if err := persistTOTPOrder(v, masterPassword, entries); err != nil {
-						status = color.RedString("Failed to save TOTP order: %v", err)
-					} else {
-						selected--
-						status = color.CyanString("Moved %s up", entries[selected].Account)
-					}
-				}
-			case strings.Contains(sequence, "\x1b[1;2B"):
-				if selected < len(entries)-1 {
-					entries[selected], entries[selected+1] = entries[selected+1], entries[selected]
-					if err := persistTOTPOrder(v, masterPassword, entries); err != nil {
-						status = color.RedString("Failed to save TOTP order: %v", err)
-					} else {
-						selected++
-						status = color.CyanString("Moved %s down", entries[selected].Account)
-					}
-				}
-			case strings.Contains(sequence, "\x1b[A"):
-				if selected > 0 {
-					selected--
-				}
-			case strings.Contains(sequence, "\x1b[B"):
-				if selected < len(entries)-1 {
-					selected++
-				}
+		case k.Type == tty.KeyUp && shift:
+			if selected > 0 {
+				move(entries, selected-1)
 			}
-		case <-ticker.C:
+		case k.Type == tty.KeyDown && shift:
+			if selected < len(entries)-1 {
+				move(entries, selected+1)
+			}
+		case k.Type == tty.KeyUp, k.IsRune('k'), k.IsCtrl('p'):
+			if selected > 0 {
+				selected--
+			}
+		case k.Type == tty.KeyDown, k.IsRune('j'), k.IsCtrl('n'):
+			if selected < len(entries)-1 {
+				selected++
+			}
+		case k.Type == tty.KeyHome, k.Type == tty.KeyPgUp:
+			selected = 0
+		case k.Type == tty.KeyEnd, k.Type == tty.KeyPgDn:
+			selected = len(entries) - 1
+		case k.Type == tty.KeyResume:
+			fmt.Print("\x1b[?25l")
 		}
 	}
 }
 
-func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, readonly, showPass bool, oldState *term.State) {
-	_ = term.Restore(int(os.Stdin.Fd()), oldState)
+// handleAction runs one action of `pm get` on res. The terminal is in cooked
+// mode while it runs.
+func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, readonly, showPass bool) {
 	fmt.Print("\033[H\033[2J")
 
 	switch action {
@@ -4592,8 +4438,7 @@ func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, re
 			if ref, ok := look.ref(res); ok {
 				name, kind, warning = itemTitle(ref), kindOf(ref).Label, deleteWarning(look, ref)
 			}
-			fmt.Printf("Delete %s (%s)? %s(y/n): ", name, kind, warning)
-			if strings.ToLower(readInput()) == "y" {
+			if promptConfirm(fmt.Sprintf("Delete %s (%s)? %s(y/n): ", name, kind, warning), false) {
 				if deleteEntryByResult(v, res) {
 					data, err := src.EncryptVault(v, mp)
 					if err == nil {
@@ -4611,8 +4456,7 @@ func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, re
 			}
 		}
 	}
-	fmt.Print("\nPress Enter to continue...")
-	readInput()
+	pressEnterToContinue()
 }
 
 func displayQuicklook(v *src.Vault, res src.SearchResult) {
@@ -4980,9 +4824,11 @@ func displayEntry(v *src.Vault, res src.SearchResult, showPass, promptCopy bool)
 
 func openSecureDocument(d src.DocumentEntry) {
 	if d.Password != "" {
-		fmt.Print("Document password: ")
-		pass, _ := readPassword()
-		fmt.Println()
+		// Esc here only skips opening the document.
+		pass, err := readLineOpts(tty.LineOptions{Prompt: "Document password: ", Hidden: true})
+		if errors.Is(err, tty.ErrCanceled) {
+			return
+		}
 		if pass != d.Password {
 			color.Red("Incorrect document password.")
 			return
@@ -5019,8 +4865,7 @@ func openTempMediaFile(fileName string, content []byte) {
 
 func promptKeyMetadataConsent(provider string) bool {
 	fmt.Printf("%s can store a one-way hash of your retrieval key in cloud metadata for key-based recovery.\n", provider)
-	fmt.Print("Allow key hash storage in cloud metadata? (y/n) [n]: ")
-	return strings.ToLower(strings.TrimSpace(readInput())) == "y"
+	return promptConfirm("Allow key hash storage in cloud metadata? (y/n) [n]: ", false)
 }
 
 func setupDropbox(v *src.Vault, mp string) error {
@@ -5029,8 +4874,7 @@ func setupDropbox(v *src.Vault, mp string) error {
 	fmt.Println("Choose Sync Mode:")
 	fmt.Println("1. APM_PUBLIC (Fast, no signup, shared storage)")
 	fmt.Println("2. Self-Hosted (Secure, uses your own Dropbox, requires login)")
-	fmt.Print("Selection (1/2): ")
-	modeSelection := readInput()
+	modeSelection := promptLine("Selection (1/2): ")
 
 	var token []byte
 	var mode string
@@ -5039,10 +4883,8 @@ func setupDropbox(v *src.Vault, mp string) error {
 	if modeSelection == "2" {
 		mode = "self_hosted"
 		color.Cyan("Self-hosted setup requires a Dropbox App Key and Secret.")
-		fmt.Print("Enter App Key: ")
-		appKey := readInput()
-		fmt.Print("Enter App Secret: ")
-		appSecret := readInput()
+		appKey := promptLine("Enter App Key: ")
+		appSecret := promptLine("Enter App Secret: ")
 
 		config := oauth.Config{
 			ClientID:     appKey,
@@ -5070,8 +4912,7 @@ func setupDropbox(v *src.Vault, mp string) error {
 	var key string
 	v.DropboxKeyMetadataConsent = promptKeyMetadataConsent("Dropbox")
 	if v.DropboxKeyMetadataConsent {
-		fmt.Print("Enter Custom Retrieval Key (leave blank to generate randomly): ")
-		customKey := readInput()
+		customKey := promptLine("Enter Custom Retrieval Key (leave blank to generate randomly): ")
 		if customKey != "" {
 			key = customKey
 		} else {
@@ -5182,9 +5023,7 @@ func getCloudManagerEx(ctx context.Context, vault *src.Vault, masterPassword str
 }
 
 func handleDownloadedVault(data []byte, provider, githubToken, githubRepo string) {
-	fmt.Print("Verify Master Password for downloaded vault: ")
-	pass, _ := readPassword()
-	fmt.Println()
+	pass, _ := promptPassword("Verify Master Password for downloaded vault: ")
 	vault, err := src.DecryptVault(data, pass, 1)
 	if err != nil {
 		color.Red("Decryption failed. Vault not saved locally: %v\n", err)
@@ -5209,8 +5048,7 @@ func handleDownloadedVault(data []byte, provider, githubToken, githubRepo string
 			fmt.Println("1. Overwrite local vault with cloud copy")
 			fmt.Println("2. Keep local vault and save cloud copy as conflict file")
 			fmt.Println("3. Cancel")
-			fmt.Print("Selection (1/2/3): ")
-			choice := strings.TrimSpace(readInput())
+			choice := strings.TrimSpace(promptLine("Selection (1/2/3): "))
 			if choice == "2" {
 				conflictPath := fmt.Sprintf("%s.conflict.%s.%s", vaultPath, provider, time.Now().Format("20060102-150405"))
 				if saveErr := src.SaveVault(conflictPath, data); saveErr != nil {
@@ -5695,8 +5533,7 @@ var authRecoverCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Print("Enter recovery email to confirm identity: ")
-		email := strings.ToLower(readInput())
+		email := strings.ToLower(promptLine("Enter recovery email to confirm identity: "))
 		h := sha256.Sum256([]byte(email))
 		if !hmac.Equal(h[:], info.EmailHash) {
 			color.Red("Identity verification failed.\n")
@@ -5756,9 +5593,7 @@ var authRecoverCmd = &cobra.Command{
 				color.Red("Recovery session expired before key verification. Please run 'pm auth recover' again.")
 				return
 			}
-			fmt.Print("Enter recovery key: ")
-			enteredRecoveryKey, err := readPassword()
-			fmt.Println()
+			enteredRecoveryKey, err := promptPassword("Enter recovery key: ")
 			if err != nil {
 				color.Red("Error reading recovery key: %v", err)
 				return
@@ -5782,8 +5617,7 @@ var authRecoverCmd = &cobra.Command{
 				return
 			}
 			remaining := expiryDuration - time.Since(startTime)
-			fmt.Printf("Enter 6-digit email code (attempt %d/%d, expires in %v): ", attempt, maxCodeAttempts, remaining.Truncate(time.Second))
-			enteredCode := strings.TrimSpace(strings.ReplaceAll(readInput(), " ", ""))
+			enteredCode := strings.TrimSpace(strings.ReplaceAll(promptLine(fmt.Sprintf("Enter 6-digit email code (attempt %d/%d, expires in %v): ", attempt, maxCodeAttempts, remaining.Truncate(time.Second))), " ", ""))
 			h := sha256.Sum256([]byte(enteredCode))
 			if hmac.Equal(h[:], codeHash[:]) {
 				emailCodeVerified = true
@@ -5801,8 +5635,7 @@ var authRecoverCmd = &cobra.Command{
 				fmt.Println("Choose recovery second factor:")
 				fmt.Println("1. Passkey (WebAuthn)")
 				fmt.Println("2. One-time recovery code")
-				fmt.Print("Selection (1/2): ")
-				choice := strings.TrimSpace(readInput())
+				choice := strings.TrimSpace(promptLine("Selection (1/2): "))
 				if choice == "1" {
 					color.Cyan("Opening browser for passkey verification...")
 					if err := src.VerifyRecoveryPasskeyFromHeader(info); err != nil {
@@ -5810,8 +5643,7 @@ var authRecoverCmd = &cobra.Command{
 						return
 					}
 				} else if choice == "2" {
-					fmt.Print("Enter one-time recovery code: ")
-					code := strings.TrimSpace(readInput())
+					code := strings.TrimSpace(promptLine("Enter one-time recovery code: "))
 					idx, ok := src.ValidateRecoveryCodeFromHeader(info, code)
 					if !ok {
 						color.Red("Invalid or already-used recovery code.")
@@ -5829,8 +5661,7 @@ var authRecoverCmd = &cobra.Command{
 					return
 				}
 			} else {
-				fmt.Print("Enter one-time recovery code: ")
-				code := strings.TrimSpace(readInput())
+				code := strings.TrimSpace(promptLine("Enter one-time recovery code: "))
 				idx, ok := src.ValidateRecoveryCodeFromHeader(info, code)
 				if !ok {
 					color.Red("Invalid or already-used recovery code.")
@@ -5852,12 +5683,8 @@ var authRecoverCmd = &cobra.Command{
 
 		color.HiGreen("Cryptographic verification successful! DEK unlocked.")
 
-		fmt.Print("enter new master passwod: ")
-		newPass, _ := readPassword()
-		fmt.Println()
-		fmt.Print("retype new master password: ")
-		confPass, _ := readPassword()
-		fmt.Println()
+		newPass, _ := promptPassword("enter new master passwod: ")
+		confPass, _ := promptPassword("retype new master password: ")
 
 		if newPass != confPass {
 			color.Red("Passwords do not match.\n")
@@ -5952,8 +5779,7 @@ var authEmailCmd = &cobra.Command{
 				return
 			}
 			remaining := verificationTTL - time.Since(verificationStart)
-			fmt.Printf("Enter 6-digit verification code (attempt %d/%d, expires in %v): ", attempt, maxCodeAttempts, remaining.Truncate(time.Second))
-			entered := strings.TrimSpace(strings.ReplaceAll(readInput(), " ", ""))
+			entered := strings.TrimSpace(strings.ReplaceAll(promptLine(fmt.Sprintf("Enter 6-digit verification code (attempt %d/%d, expires in %v): ", attempt, maxCodeAttempts, remaining.Truncate(time.Second))), " ", ""))
 			h := sha256.Sum256([]byte(entered))
 			if hmac.Equal(h[:], codeHash[:]) {
 				verified = true
@@ -6143,10 +5969,7 @@ var authChangeCmd = &cobra.Command{
 
 		color.Yellow("Enter new master password: ")
 		newPass, _ := readPassword()
-		fmt.Println()
-		fmt.Print("Confirm new master password: ")
-		confPass, _ := readPassword()
-		fmt.Println()
+		confPass, _ := promptPassword("Confirm new master password: ")
 
 		if newPass != confPass {
 			color.Red("Passwords do not match.\n")
@@ -6196,9 +6019,7 @@ var authQuorumSetupCmd = &cobra.Command{
 
 		shareMap, err := src.SetupRecoveryQuorumWithKey(vault, recoveryKey, threshold, shares)
 		if err != nil && recoveryKey == "" && strings.Contains(strings.ToLower(err.Error()), "provide the recovery key explicitly") {
-			fmt.Print("Recovery key required for this vault. Enter recovery key: ")
-			inputKey, rErr := readPassword()
-			fmt.Println()
+			inputKey, rErr := promptPassword("Recovery key required for this vault. Enter recovery key: ")
 			if rErr != nil {
 				color.Red("Failed to read recovery key: %v", rErr)
 				return
@@ -6250,8 +6071,7 @@ var authQuorumRecoverCmd = &cobra.Command{
 		}
 
 		if len(info.EmailHash) > 0 {
-			fmt.Print("Enter recovery email to confirm identity: ")
-			email := strings.ToLower(readInput())
+			email := strings.ToLower(promptLine("Enter recovery email to confirm identity: "))
 			h := sha256.Sum256([]byte(email))
 			if !hmac.Equal(h[:], info.EmailHash) {
 				color.Red("Identity verification failed.\n")
@@ -6268,8 +6088,7 @@ var authQuorumRecoverCmd = &cobra.Command{
 		fmt.Printf("Enter at least %d valid shares.\n", info.RecoveryShareThreshold)
 		shares := make([]string, 0, info.RecoveryShareThreshold)
 		for i := 0; i < info.RecoveryShareThreshold; i++ {
-			fmt.Printf("Share %d: ", i+1)
-			share := strings.TrimSpace(readInput())
+			share := strings.TrimSpace(promptLine(fmt.Sprintf("Share %d: ", i+1)))
 			if share == "" {
 				color.Red("Share cannot be empty.")
 				return
@@ -6289,12 +6108,8 @@ var authQuorumRecoverCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Print("Enter new master password: ")
-		newPass, _ := readPassword()
-		fmt.Println()
-		fmt.Print("Retype new master password: ")
-		confPass, _ := readPassword()
-		fmt.Println()
+		newPass, _ := promptPassword("Enter new master password: ")
+		confPass, _ := promptPassword("Retype new master password: ")
 		if newPass != confPass {
 			color.Red("Passwords do not match.")
 			return
@@ -6356,53 +6171,77 @@ var mcpTokenCmd = &cobra.Command{
 
 		color.HiCyan("APM MCP Server Setup")
 
+		cancelled := func(err error) bool {
+			if errors.Is(err, tty.ErrCanceled) {
+				fmt.Println("Token creation cancelled.")
+				return true
+			}
+			return false
+		}
+
 		var name string
-		promptName := &survey.Input{Message: "Token name:"}
-		if err := survey.AskOne(promptName, &name, survey.WithValidator(survey.Required)); err != nil {
-			color.Red("Setup aborted: %v", err)
-			return
-		}
-		name = strings.TrimSpace(name)
-		if name == "" {
-			color.Red("Token name is required.")
-			return
+		for name == "" {
+			in, err := readLineOpts(tty.LineOptions{Prompt: "Token name: "})
+			if cancelled(err) {
+				return
+			}
+			if err != nil {
+				color.Red("Setup aborted: %v", err)
+				return
+			}
+			name = strings.TrimSpace(in)
+			if name == "" {
+				if !tty.Interactive() {
+					color.Red("Token name is required.")
+					return
+				}
+				color.Yellow("Token name is required.")
+			}
 		}
 
-		var expiryStr string
-		promptExpiry := &survey.Input{
-			Message: "Expiry in minutes (0 for never):",
-			Default: "0",
+		expiry := -1
+		for expiry < 0 {
+			in, err := readLineOpts(tty.LineOptions{Prompt: "Expiry in minutes (0 for never) [0]: "})
+			if cancelled(err) {
+				return
+			}
+			if err != nil {
+				color.Red("Setup aborted: %v", err)
+				return
+			}
+			in = strings.TrimSpace(in)
+			if in == "" {
+				in = "0"
+			}
+			n, convErr := strconv.Atoi(in)
+			switch {
+			case convErr != nil:
+				err = fmt.Errorf("expiry must be a whole number")
+			case n < 0:
+				err = fmt.Errorf("expiry must be 0 or greater")
+			default:
+				expiry = n
+				continue
+			}
+			if !tty.Interactive() {
+				color.Red("Setup aborted: %v", err)
+				return
+			}
+			color.Yellow("%v", err)
 		}
-		err := survey.AskOne(promptExpiry, &expiryStr, survey.WithValidator(func(ans interface{}) error {
-			value, ok := ans.(string)
-			if !ok {
-				return fmt.Errorf("invalid expiry value")
-			}
-			n, convErr := strconv.Atoi(strings.TrimSpace(value))
-			if convErr != nil {
-				return fmt.Errorf("expiry must be a whole number")
-			}
-			if n < 0 {
-				return fmt.Errorf("expiry must be 0 or greater")
-			}
-			return nil
-		}))
+
+		options := src.MCPToolPermissions()
+		picked, err := tty.MultiSelect(tty.SelectOptions{Title: "Permissions (space to select, enter to confirm):", Options: options})
+		if err = exitOnInputError(err); cancelled(err) {
+			return
+		}
 		if err != nil {
 			color.Red("Setup aborted: %v", err)
 			return
 		}
-
-		expiry, _ := strconv.Atoi(strings.TrimSpace(expiryStr))
-
 		permissions := []string{}
-		promptPerms := &survey.MultiSelect{
-			Message: "Permissions (space to select, enter to confirm):",
-			Options: src.MCPToolPermissions(),
-		}
-		err = survey.AskOne(promptPerms, &permissions)
-		if err != nil {
-			color.Red("Setup aborted: %v", err)
-			return
+		for _, i := range picked {
+			permissions = append(permissions, options[i])
 		}
 
 		if len(permissions) == 0 {

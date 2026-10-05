@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aaravmaloo/apm/internal/tty"
 	src "github.com/aaravmaloo/apm/src"
 
 	"github.com/fatih/color"
@@ -445,9 +446,10 @@ func copyMenu(copies []copyTarget, open func()) {
 		line += "[o] Open file  ·  "
 	}
 	for {
-		fmt.Print("\n" + line + "Enter to go back: ")
-		in := strings.ToLower(strings.TrimSpace(readInput()))
-		if in == "" {
+		// Esc goes back too; it does not end the command.
+		in, err := readLineOpts(tty.LineOptions{Prompt: "\n" + line + "Enter to go back: "})
+		in = strings.ToLower(strings.TrimSpace(in))
+		if err != nil || in == "" {
 			return
 		}
 		if in == "o" && open != nil {

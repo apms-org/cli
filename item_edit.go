@@ -8,12 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
+	"github.com/aaravmaloo/apm/internal/tty"
 	src "github.com/aaravmaloo/apm/src"
 
 	"github.com/fatih/color"
-	"golang.org/x/term"
 )
 
 // itemDraft holds the edits to one item until they are saved, so a whole edit
@@ -185,118 +186,89 @@ func (d *itemDraft) changes() int {
 	return len(d.changed)
 }
 
-// editTerm keeps the terminal raw while the user moves through the editor and
-// hands it back for typed answers.
+// editTerm keeps the terminal raw while the user moves through the editor.
+// Typed answers use the shared line editor, so Esc cancels just that answer.
 type editTerm struct {
-	fd     int
-	cooked *term.State
+	screen *rawScreen
 }
 
+// Keys the editor acts on. Plain characters are returned as their lower-case
+// rune, so these start past the last Unicode code point.
 const (
-	keyNone = iota + 256
+	keyNone = iota + 0x110000
 	keyUp
 	keyDown
+	keyHome
+	keyEnd
+	keyPgUp
+	keyPgDn
 	keyEnter
 	keyEsc
-	keyCtrlC
+	keyRedraw
+	keyEOF
 )
 
+// key waits for one key. Ctrl+C restores the terminal and exits pm.
 func (t *editTerm) key() int {
-	b := make([]byte, 8)
-	n, err := os.Stdin.Read(b)
-	if err != nil || n == 0 {
-		return keyCtrlC
+	k, err := tty.ReadKey()
+	if err != nil {
+		if errors.Is(err, tty.ErrInterrupted) {
+			fmt.Print("\033[H\033[J")
+			exitInterrupted()
+		}
+		return keyEOF
 	}
 	switch {
-	case n >= 3 && b[0] == 27 && (b[1] == '[' || b[1] == 'O'):
-		switch b[2] {
-		case 'A':
-			return keyUp
-		case 'B':
-			return keyDown
-		}
-		return keyNone
-	case n >= 2 && (b[0] == 224 || b[0] == 0):
-		switch b[1] {
-		case 72:
-			return keyUp
-		case 80:
-			return keyDown
-		}
-		return keyNone
-	case b[0] == 27:
-		return keyEsc
-	case b[0] == 3 || b[0] == 4:
-		return keyCtrlC
-	case b[0] == '\r' || b[0] == '\n':
-		return keyEnter
-	case b[0] == 'k':
+	case k.Type == tty.KeyUp, k.IsRune('k'), k.IsCtrl('p'):
 		return keyUp
-	case b[0] == 'j':
+	case k.Type == tty.KeyDown, k.IsRune('j'), k.IsCtrl('n'):
 		return keyDown
+	case k.Type == tty.KeyHome:
+		return keyHome
+	case k.Type == tty.KeyEnd:
+		return keyEnd
+	case k.Type == tty.KeyPgUp:
+		return keyPgUp
+	case k.Type == tty.KeyPgDn:
+		return keyPgDn
+	case k.Type == tty.KeyEnter:
+		return keyEnter
+	case k.Type == tty.KeyEsc, k.IsCtrl('d'):
+		return keyEsc
+	case k.Type == tty.KeyResume, k.IsCtrl('l'):
+		return keyRedraw
+	case k.Type == tty.KeyRune && k.Mod&(tty.ModAlt|tty.ModCtrl|tty.ModMeta) == 0:
+		return int(unicode.ToLower(k.Rune))
 	}
-	return int(b[0] | 0x20)
+	return keyNone
 }
 
+// print clears the screen and shows s.
 func (t *editTerm) print(s string) {
-	fmt.Print("\033[H\033[J" + strings.ReplaceAll(s, "\n", "\r\n"))
+	tty.Printf("%s", "\033[H\033[J"+s)
 }
 
 func (t *editTerm) withCooked(fn func()) {
-	_ = term.Restore(t.fd, t.cooked)
-	fn()
-	_, _ = term.MakeRaw(t.fd)
+	t.screen.cooked(fn)
 }
 
-// say prints below what is already on screen while the terminal is raw.
+// say prints below what is already on screen.
 func (t *editTerm) say(format string, args ...any) {
-	fmt.Print(strings.ReplaceAll(fmt.Sprintf(format, args...), "\n", "\r\n"))
+	tty.Printf("%s", fmt.Sprintf(format, args...))
 }
 
-// line reads one typed answer while the terminal stays raw, so Esc can cancel
-// it. Hidden answers are not echoed. ok is false when the user cancelled.
-func (t *editTerm) line(hidden bool) (string, bool) {
-	var buf []byte
-	b := make([]byte, 256)
-	for {
-		n, err := os.Stdin.Read(b)
-		if err != nil || n == 0 {
-			return "", false
+// line reads one typed answer after prompt. Hidden answers are not echoed.
+// ok is false when the user pressed Esc (or input ended).
+func (t *editTerm) line(prompt string, hidden bool) (string, bool) {
+	s, err := tty.ReadLine(tty.LineOptions{Prompt: prompt, Hidden: hidden})
+	if err != nil {
+		if errors.Is(err, tty.ErrInterrupted) {
+			fmt.Print("\033[H\033[J")
 		}
-		for i := 0; i < n; i++ {
-			c := b[i]
-			switch {
-			case c == 27 && i+1 < n && (b[i+1] == '[' || b[i+1] == 'O'):
-				// An arrow or other special key: skip its whole sequence.
-				for i += 2; i < n && (b[i] < 0x40 || b[i] > 0x7e); i++ {
-				}
-			case c == 27 || c == 3:
-				fmt.Print("\r\n")
-				return "", false
-			case c == '\r' || c == '\n':
-				fmt.Print("\r\n")
-				return strings.TrimSpace(string(buf)), true
-			case c == 127 || c == 8:
-				if len(buf) > 0 {
-					_, size := utf8.DecodeLastRune(buf)
-					buf = buf[:len(buf)-size]
-					if !hidden {
-						fmt.Print("\b \b")
-					}
-				}
-			case c == 21:
-				if !hidden {
-					fmt.Print(strings.Repeat("\b \b", utf8.RuneCount(buf)))
-				}
-				buf = buf[:0]
-			case c >= 32:
-				buf = append(buf, c)
-				if !hidden {
-					_, _ = os.Stdout.Write([]byte{c})
-				}
-			}
-		}
+		_ = exitOnInputError(err)
+		return "", false
 	}
+	return s, true
 }
 
 // heading clears the screen for a prompt about one part of the item.
@@ -305,7 +277,7 @@ func (t *editTerm) heading(title string) {
 }
 
 func (t *editTerm) width() int {
-	if w, _, err := term.GetSize(t.fd); err == nil && w > 20 {
+	if w := tty.Width(); w > 20 {
 		return w
 	}
 	return 80
@@ -326,38 +298,22 @@ func (t *editTerm) pick(title string, options []string, current string) (string,
 	if sel < 0 {
 		sel = 0
 	}
-	for {
-		var b strings.Builder
-		b.WriteString(color.New(color.Bold).Sprint(title) + "\n\n")
-		for i, o := range options {
-			if i == sel {
-				b.WriteString("  \x1b[7m " + o + " \x1b[0m\n")
-			} else {
-				b.WriteString("   " + o + "\n")
-			}
-		}
-		b.WriteString("\n" + color.New(color.Faint).Sprint("↑↓ move · Enter choose · Esc cancel"))
-		t.print(b.String())
-		switch t.key() {
-		case keyUp:
-			if sel > 0 {
-				sel--
-			}
-		case keyDown:
-			if sel < len(options)-1 {
-				sel++
-			}
-		case keyEnter:
-			return options[sel], true
-		case keyEsc, keyCtrlC, 'q':
-			return "", false
-		}
+	t.heading(title)
+	t.say("%s\n\n", color.New(color.Faint).Sprint("↑↓ move · Enter choose · Esc cancel"))
+	i, err := selectOption(tty.SelectOptions{Options: options, Initial: sel})
+	if err != nil {
+		return "", false
 	}
+	return options[i], true
 }
 
 func (t *editTerm) confirm(question string) bool {
 	t.print(question + " [y/N] ")
-	return t.key() == 'y'
+	ok, err := tty.Confirm(false)
+	if exitOnInputError(err) != nil {
+		return false
+	}
+	return ok
 }
 
 func clipRunes(s string, max int) string {
@@ -416,21 +372,19 @@ func (d *itemDraft) render(rows []editRow, sel, width int, status string) string
 // editItemInteractive shows everything an item holds and lets the user pick
 // what to change with the arrow keys. Nothing is written until they save.
 func editItemInteractive(v *src.Vault, mp string, ref src.VaultItemRef) {
-	fd := int(os.Stdin.Fd())
-	if !term.IsTerminal(fd) {
+	if !tty.Interactive() {
 		color.Red("Editing needs an interactive terminal.")
 		return
 	}
-	cooked, err := term.MakeRaw(fd)
-	if err != nil {
+	t := &editTerm{screen: &rawScreen{}}
+	if err := t.screen.enter(); err != nil {
 		color.Red("Error entering raw mode: %v", err)
 		return
 	}
-	t := &editTerm{fd: fd, cooked: cooked}
-	defer term.Restore(fd, cooked)
+	defer t.screen.leave()
 
 	finish := func(msg string) {
-		_ = term.Restore(fd, cooked)
+		t.screen.leave()
 		fmt.Print("\033[H\033[J")
 		fmt.Println(msg)
 	}
@@ -452,6 +406,17 @@ func editItemInteractive(v *src.Vault, mp string, ref src.VaultItemRef) {
 			if sel < len(rows)-1 {
 				sel++
 			}
+		case keyHome:
+			sel = 0
+		case keyEnd:
+			sel = len(rows) - 1
+		case keyPgUp:
+			sel = max(sel-10, 0)
+		case keyPgDn:
+			sel = min(sel+10, len(rows)-1)
+		case keyEOF:
+			finish("Stopped editing. Nothing was saved.")
+			return
 		case keyEnter:
 			status = d.editRow(t, rows[sel])
 		case 'x':
@@ -465,7 +430,7 @@ func editItemInteractive(v *src.Vault, mp string, ref src.VaultItemRef) {
 				finish(color.GreenString("Saved %s.", itemTitle(d.ref)))
 				return
 			}
-		case keyEsc, keyCtrlC, 'q':
+		case keyEsc, 'q':
 			if d.changes() == 0 {
 				finish("No changes.")
 				return
@@ -479,6 +444,9 @@ func editItemInteractive(v *src.Vault, mp string, ref src.VaultItemRef) {
 				}
 			case 'n':
 				finish("Discarded your changes.")
+				return
+			case keyEOF:
+				finish("Stopped editing. Nothing was saved.")
 				return
 			}
 		}
@@ -588,8 +556,8 @@ func (d *itemDraft) promptField(t *editTerm, fd itemField) string {
 
 	switch fd.Kind {
 	case "password", "secret":
-		t.say("Type the new %s. It stays hidden. %s.\n> ", strings.ToLower(fd.Label), keep)
-		in, ok := t.line(true)
+		t.say("Type the new %s. It stays hidden. %s.\n", strings.ToLower(fd.Label), keep)
+		in, ok := t.line("> ", true)
 		if !ok || in == "" {
 			return ""
 		}
@@ -597,8 +565,8 @@ func (d *itemDraft) promptField(t *editTerm, fd itemField) string {
 			return status
 		}
 		if fd.Kind == "password" {
-			t.say("Type it again.\n> ")
-			again, ok := t.line(true)
+			t.say("Type it again.\n")
+			again, ok := t.line("> ", true)
 			if !ok {
 				return ""
 			}
@@ -608,8 +576,8 @@ func (d *itemDraft) promptField(t *editTerm, fd itemField) string {
 		}
 		d.set(fd.Key, in)
 	case "totp":
-		t.say("Paste the setup key or otpauth:// link the site shows. %s.\n> ", keep)
-		in, ok := t.line(false)
+		t.say("Paste the setup key or otpauth:// link the site shows. %s.\n", keep)
+		in, ok := t.line("> ", false)
 		if !ok || in == "" {
 			return ""
 		}
@@ -622,8 +590,8 @@ func (d *itemDraft) promptField(t *editTerm, fd itemField) string {
 		}
 		d.set(fd.Key, secret)
 	case "file":
-		t.say("Type or drop the path of the file to put in its place. Enter keeps it, Esc cancels.\n> ")
-		in, ok := t.line(false)
+		t.say("Type or drop the path of the file to put in its place. Enter keeps it, Esc cancels.\n")
+		in, ok := t.line("> ", false)
 		if !ok || in == "" {
 			return ""
 		}
@@ -639,8 +607,8 @@ func (d *itemDraft) promptField(t *editTerm, fd itemField) string {
 		}
 		d.set(fd.Key, map[string]any{"name": filepath.Base(path), "size": len(data), "data": base64.StdEncoding.EncodeToString(data)})
 	case "list", "codes":
-		t.say("Type them separated by commas. %s.\n> ", keep)
-		in, ok := t.line(false)
+		t.say("Type them separated by commas. %s.\n", keep)
+		in, ok := t.line("> ", false)
 		if !ok || in == "" {
 			return ""
 		}
@@ -655,8 +623,8 @@ func (d *itemDraft) promptField(t *editTerm, fd itemField) string {
 		}
 		d.set(fd.Key, list)
 	default:
-		t.say("Type the new %s. %s.\n> ", strings.ToLower(fd.Label), keep)
-		in, ok := t.line(false)
+		t.say("Type the new %s. %s.\n", strings.ToLower(fd.Label), keep)
+		in, ok := t.line("> ", false)
 		if !ok || in == "" {
 			return ""
 		}
@@ -687,14 +655,13 @@ func (d *itemDraft) promptCustom(t *editTerm, i int, add bool) string {
 	cf := src.CustomField{}
 	if add {
 		t.heading(d.title() + " › New custom field")
-		t.say("Label, like PIN or Security answer. Esc cancels.\n> ")
-		label, ok := t.line(false)
+		t.say("Label, like PIN or Security answer. Esc cancels.\n")
+		label, ok := t.line("> ", false)
 		if !ok || label == "" {
 			return ""
 		}
 		cf.Label = label
-		t.say("Hide it like a password? [y/N] ")
-		in, ok := t.line(false)
+		in, ok := t.line("Hide it like a password? [y/N] ", false)
 		if !ok {
 			return ""
 		}
@@ -703,8 +670,7 @@ func (d *itemDraft) promptCustom(t *editTerm, i int, add bool) string {
 		cf = d.custom[i]
 		t.heading(d.title() + " › " + firstNonEmpty(cf.Label, "Field"))
 		t.say("%s\n", color.New(color.Faint).Sprint("Enter keeps each answer, Esc cancels."))
-		t.say("Label [%s]: ", cf.Label)
-		in, ok := t.line(false)
+		in, ok := t.line(fmt.Sprintf("Label [%s]: ", cf.Label), false)
 		if !ok {
 			return ""
 		}
@@ -715,8 +681,7 @@ func (d *itemDraft) promptCustom(t *editTerm, i int, add bool) string {
 		if cf.Hidden {
 			hide = "Y/n"
 		}
-		t.say("Hide it like a password? [%s] ", hide)
-		if in, ok = t.line(false); !ok {
+		if in, ok = t.line(fmt.Sprintf("Hide it like a password? [%s] ", hide), false); !ok {
 			return ""
 		}
 		switch in = strings.ToLower(in); {
@@ -726,17 +691,14 @@ func (d *itemDraft) promptCustom(t *editTerm, i int, add bool) string {
 			cf.Hidden = false
 		}
 	}
+	prompt := fmt.Sprintf("Value [%s]: ", cf.Value)
 	switch {
-	case cf.Hidden && add:
-		t.say("Value (hidden): ")
 	case cf.Hidden:
-		t.say("Value (hidden): ")
+		prompt = "Value (hidden): "
 	case add:
-		t.say("Value: ")
-	default:
-		t.say("Value [%s]: ", cf.Value)
+		prompt = "Value: "
 	}
-	value, ok := t.line(cf.Hidden)
+	value, ok := t.line(prompt, cf.Hidden)
 	if !ok {
 		return ""
 	}
@@ -763,8 +725,8 @@ func (d *itemDraft) renamePasskey(t *editTerm, i int) string {
 	if pk.Label != "" {
 		t.say(", - clears it")
 	}
-	t.say(", Esc cancels.\n> ")
-	in, ok := t.line(false)
+	t.say(", Esc cancels.\n")
+	in, ok := t.line("> ", false)
 	label := pk.Label
 	switch {
 	case !ok || in == "":
