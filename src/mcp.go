@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -23,8 +22,6 @@ import (
 )
 
 var mcpToolPermissions = []string{
-	"check_installation",
-	"install_apm",
 	"list_vault",
 	"get_entry",
 	"search_vault",
@@ -81,19 +78,24 @@ func BuildMCPServerConfigWithToken(token string) map[string]interface{} {
 		exe = "pm"
 	}
 
+	args := []interface{}{"mcp", "serve"}
+	if token != "" {
+		args = append(args, "--token", token)
+	}
+
 	if runtime.GOOS == "windows" {
 		// Windows MCP clients typically expect a shell entry point rather than
 		// invoking the binary directly.
 		return map[string]interface{}{
 			"command": "cmd",
-			"args":    []interface{}{"/c", exe, "mcp", "serve", "--token", token},
+			"args":    append([]interface{}{"/c", exe}, args...),
 			"env":     map[string]string{},
 		}
 	}
 
 	return map[string]interface{}{
 		"command": exe,
-		"args":    []interface{}{"mcp", "serve", "--token", token},
+		"args":    args,
 		"env":     map[string]string{},
 	}
 }
@@ -275,43 +277,16 @@ func ListMCPTokens() ([]MCPToken, error) {
 	return list, nil
 }
 
-func ensureMCPMutationAuthorized(tokenName, tool string, args json.RawMessage, preview string) (bool, string, string, error) {
-	var meta struct {
-		TxID    string `json:"tx_id"`
-		Approve bool   `json:"approve"`
-	}
-	if err := json.Unmarshal(args, &meta); err != nil {
-		return false, "", "", fmt.Errorf("failed to parse mutation args: %v", err)
-	}
-
-	if strings.TrimSpace(meta.TxID) == "" {
-		// Mutating tools default to a preview-only phase until the caller
-		// explicitly binds the request to a pending transaction.
-		tx, err := CreateMCPTransaction(tokenName, tool, args, preview, 15*time.Minute)
-		if err != nil {
-			return false, "", "", err
-		}
-		msg := fmt.Sprintf("Preview: %s\nTransaction created: %s\nRe-run with {\"tx_id\":\"%s\",\"approve\":true,...} to commit.", preview, tx.ID, tx.ID)
-		return false, tx.ID, msg, nil
-	}
-
-	tx, err := GetMCPTransaction(meta.TxID)
+// requestMCPApproval queues a vault change as a pending transaction. Only the
+// person at the computer can commit it; nothing an MCP client sends can.
+func requestMCPApproval(tokenName, tool string, args json.RawMessage, preview string) *mcp.CallToolResult {
+	tx, err := CreateMCPTransaction(tokenName, tool, args, preview, 15*time.Minute)
 	if err != nil {
-		return false, "", "", err
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Transaction error: %v", err)}}}
 	}
-	if tx.Tool != tool {
-		return false, "", "", fmt.Errorf("transaction tool mismatch: expected %s, got %s", tool, tx.Tool)
-	}
-	if tx.TokenName != tokenName {
-		return false, "", "", fmt.Errorf("transaction token mismatch")
-	}
-	if tx.Status != "pending" {
-		return false, "", "", fmt.Errorf("transaction is %s", tx.Status)
-	}
-	if !meta.Approve {
-		return false, tx.ID, fmt.Sprintf("Transaction %s pending. Re-run with approve=true to commit.", tx.ID), nil
-	}
-	return true, tx.ID, "", nil
+	LogAction("MCP_TX_REQUESTED", fmt.Sprintf("Token '%s' requested: %s", tokenName, preview))
+	msg := fmt.Sprintf("Waiting for approval: %s\nRequest %s expires at %s. The user approves or rejects it in the APM app (Settings > AI access). Nothing changes until they approve. Call tx_list to see whether it was approved.", preview, tx.ID, tx.ExpiresAt.Format(time.RFC3339))
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}
 }
 
 func StartMCPServer(token string, vaultPath string, transport mcp.Transport) error {
@@ -345,49 +320,6 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		Name:    "APM-Server",
 		Version: "1.3.0",
 	}, nil)
-
-	s.AddTool(&mcp.Tool{
-		Name:        "check_installation",
-		Description: "Check if apm is installed and initialized on the system",
-		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		if !hasPermission(mcpToken.Permissions, "check_installation") {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Denied"}}}, nil
-		}
-		_, err := exec.LookPath("apm")
-		installed := err == nil
-		vaultExists := VaultExists(vaultPath)
-
-		status := "APM is fully installed and initialized."
-		if !installed && !vaultExists {
-			status = "APM is NOT installed. Please run 'install_apm' to set it up."
-		} else if !installed {
-			status = "APM binary not found in PATH, but vault exists."
-		} else if !vaultExists {
-			status = "APM binary found, but vault is not initialized. Run 'pm setup'."
-		}
-
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: status}}}, nil
-	})
-
-	s.AddTool(&mcp.Tool{
-		Name:        "install_apm",
-		Description: "Install and initialize APM (requires LLM help/interaction)",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"master_password": map[string]any{"type": "string"},
-			},
-		},
-	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		if !hasPermission(mcpToken.Permissions, "install_apm") {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Denied"}}}, nil
-		}
-		if VaultExists(vaultPath) {
-			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "Vault already exists. No installation needed."}}}, nil
-		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "To install APM: 1. Ensure go is installed. 2. Clone repo. 3. Run 'go build -o apm.exe'. 4. Run 'pm setup'. I can guide you through each step if you'd like."}}}, nil
-	})
 
 	s.AddTool(&mcp.Tool{
 		Name:        "list_vault",
@@ -691,7 +623,7 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 
 	s.AddTool(&mcp.Tool{
 		Name:        "add_entry",
-		Description: "Add a new entry to the vault",
+		Description: "Request a new vault entry. The entry is added only after the user approves the request in the APM app.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -766,44 +698,12 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		var args MCPAddEntryArgs
 		json.Unmarshal(req.Params.Arguments, &args)
 
-		allowed, txID, txMessage, txErr := ensureMCPMutationAuthorized(
-			mcpToken.Name,
-			"add_entry",
-			req.Params.Arguments,
-			fmt.Sprintf("Add %s entry '%s' in space '%s'", args.Type, args.Name, args.Space),
-		)
-		if txErr != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Transaction error: %v", txErr)}}}, nil
-		}
-		if !allowed {
-			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: txMessage}}}, nil
-		}
-
-		vault, masterPwd, err := unlockVaultForMCP(vaultPath)
-		if err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Vault Error: %v", err)}}}, nil
-		}
-		if r := mcpRefuseNewer(vault); r != nil {
-			return r, nil
-		}
-
-		opErr := ApplyMCPAddEntry(vault, args)
-
-		if opErr != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Operation failed: %v", opErr)}}}, nil
-		}
-
-		if err := saveVault(vault, masterPwd, vaultPath); err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Save failed"}}}, nil
-		}
-		receipt, _ := FinalizeMCPTransaction(txID, fmt.Sprintf("added:%s", args.Name), true)
-		LogAction("MCP_ENTRY_ADDED", fmt.Sprintf("Token '%s' added entry '%s'", mcpToken.Name, args.Name))
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Entry added. Receipt: %s", receipt)}}}, nil
+		return requestMCPApproval(mcpToken.Name, "add_entry", req.Params.Arguments, fmt.Sprintf("Add %s entry '%s' in space '%s'", args.Type, args.Name, args.Space)), nil
 	})
 
 	s.AddTool(&mcp.Tool{
 		Name:        "delete_entry",
-		Description: "Remove an entry from the vault",
+		Description: "Request removal of a vault entry. The entry is removed only after the user approves the request in the APM app.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"name": map[string]any{"type": "string"}},
@@ -818,39 +718,12 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		}
 		json.Unmarshal(req.Params.Arguments, &args)
 
-		allowed, txID, txMessage, txErr := ensureMCPMutationAuthorized(
-			mcpToken.Name,
-			"delete_entry",
-			req.Params.Arguments,
-			fmt.Sprintf("Delete entry '%s'", args.Name),
-		)
-		if txErr != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Transaction error: %v", txErr)}}}, nil
-		}
-		if !allowed {
-			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: txMessage}}}, nil
-		}
-
-		vault, masterPwd, err := unlockVaultForMCP(vaultPath)
-		if err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error"}}}, nil
-		}
-		if r := mcpRefuseNewer(vault); r != nil {
-			return r, nil
-		}
-
-		if !ApplyMCPDeleteEntry(vault, args.Name) {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Entry not found"}}}, nil
-		}
-		saveVault(vault, masterPwd, vaultPath)
-		receipt, _ := FinalizeMCPTransaction(txID, fmt.Sprintf("deleted:%s", args.Name), true)
-		LogAction("MCP_ENTRY_DELETED", fmt.Sprintf("Token '%s' deleted '%s'", mcpToken.Name, args.Name))
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Entry deleted. Receipt: %s", receipt)}}}, nil
+		return requestMCPApproval(mcpToken.Name, "delete_entry", req.Params.Arguments, fmt.Sprintf("Delete entry '%s'", args.Name)), nil
 	})
 
 	s.AddTool(&mcp.Tool{
 		Name:        "edit_entry",
-		Description: "Edit an existing entry in the vault",
+		Description: "Request a change to an existing vault entry. The change is made only after the user approves the request in the APM app.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -875,37 +748,7 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		var args MCPEditEntryArgs
 		json.Unmarshal(req.Params.Arguments, &args)
 
-		allowed, txID, txMessage, txErr := ensureMCPMutationAuthorized(
-			mcpToken.Name,
-			"edit_entry",
-			req.Params.Arguments,
-			fmt.Sprintf("Edit %s entry '%s' in space '%s'", args.Type, args.Name, args.Space),
-		)
-		if txErr != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Transaction error: %v", txErr)}}}, nil
-		}
-		if !allowed {
-			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: txMessage}}}, nil
-		}
-
-		vault, masterPwd, err := unlockVaultForMCP(vaultPath)
-		if err != nil {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error"}}}, nil
-		}
-		if r := mcpRefuseNewer(vault); r != nil {
-			return r, nil
-		}
-
-		updated := ApplyMCPEditEntry(vault, args)
-
-		if !updated {
-			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Entry not found or editing not fully implemented for this type via MCP yet"}}}, nil
-		}
-
-		saveVault(vault, masterPwd, vaultPath)
-		receipt, _ := FinalizeMCPTransaction(txID, fmt.Sprintf("edited:%s", args.Name), true)
-		LogAction("MCP_ENTRY_EDITED", fmt.Sprintf("Token '%s' edited entry '%s'", mcpToken.Name, args.Name))
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Entry updated. Receipt: %s", receipt)}}}, nil
+		return requestMCPApproval(mcpToken.Name, "edit_entry", req.Params.Arguments, fmt.Sprintf("Edit %s entry '%s' in space '%s'", args.Type, args.Name, args.Space)), nil
 	})
 
 	s.AddTool(&mcp.Tool{

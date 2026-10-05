@@ -101,13 +101,11 @@ Add a new entry to the vault.
 | `type`    | `string` |    ✅     | Entry type                   |
 | `fields`  | `object` |    ✅     | Entry fields (type-specific) |
 | `space`   | `string` |    ❌     | Target space                 |
-| `tx_id`   | `string` |    ❌     | Transaction ID (for commit)  |
-| `approve` | `bool`   |    ❌     | Commit flag                  |
 
 **Transaction flow:**
 
-1. **First call** (no `tx_id`) → Returns preview + `tx_id`
-2. **Second call** (`tx_id` + `approve: true`) → Commits and returns receipt ID
+1. The call queues a pending request and returns its `tx_id`. Nothing is written yet.
+2. You approve or reject the request in the desktop app (**Settings → AI access**). The assistant cannot approve it.
 
 ---
 
@@ -123,8 +121,6 @@ Edit an existing entry.
 | :-------- | :------- | :------: | :------------- |
 | `id`      | `string` |    ✅     | Entry UUID     |
 | `fields`  | `object` |    ✅     | Updated fields |
-| `tx_id`   | `string` |    ❌     | Transaction ID |
-| `approve` | `bool`   |    ❌     | Commit flag    |
 
 ---
 
@@ -139,8 +135,6 @@ Delete an entry.
 | Parameter | Type     | Required | Description    |
 | :-------- | :------- | :------: | :------------- |
 | `id`      | `string` |    ✅     | Entry UUID     |
-| `tx_id`   | `string` |    ❌     | Transaction ID |
-| `approve` | `bool`   |    ❌     | Commit flag    |
 
 ---
 
@@ -203,13 +197,13 @@ Read the audit log.
 
 ## Transaction Guardrails Summary
 
-| Tool            | Uses Transaction | Preview Phase           | Commit Phase                   |
-| :-------------- | :--------------: | :---------------------- | :----------------------------- |
-| `add_entry`     |        ✅         | Returns preview + tx_id | Requires tx_id + approve: true |
-| `edit_entry`    |        ✅         | Returns preview + tx_id | Requires tx_id + approve: true |
-| `delete_entry`  |        ✅         | Returns preview + tx_id | Requires tx_id + approve: true |
-| `manage_spaces` |        ❌         | —                       | Executes immediately           |
-| All read tools  |        ❌         | —                       | Executes immediately           |
+| Tool            | Uses Transaction | Call returns            | Commit                          |
+| :-------------- | :--------------: | :---------------------- | :------------------------------ |
+| `add_entry`     |        ✅         | Pending request + tx_id | When you approve it in the app  |
+| `edit_entry`    |        ✅         | Pending request + tx_id | When you approve it in the app  |
+| `delete_entry`  |        ✅         | Pending request + tx_id | When you approve it in the app  |
+| `manage_spaces` |        ❌         | —                       | Executes immediately            |
+| All read tools  |        ❌         | —                       | Executes immediately            |
 
 ---
 
@@ -220,6 +214,6 @@ Read the audit log.
 | `PERMISSION_DENIED`   | Token lacks required scope         |
 | `SESSION_REQUIRED`    | No active APM session              |
 | `ENTRY_NOT_FOUND`     | Entry ID/name not found            |
-| `TRANSACTION_EXPIRED` | tx_id expired or already committed |
+| `TRANSACTION_EXPIRED` | Request expired before you approved it |
 | `INVALID_PARAMETERS`  | Missing or malformed parameters    |
 | `VAULT_LOCKED`        | Vault is not unlocked              |

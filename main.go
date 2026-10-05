@@ -6337,28 +6337,14 @@ func buildMCPConfigForToken(token string) map[string]interface{} {
 	}
 }
 
-func buildMCPSetupConfig() map[string]interface{} {
-	cmdStr := "if (! (Get-Command pm -ErrorAction SilentlyContinue)) { iwr -useb https://get.apm.dev/install.ps1 | iex }; pm mcp serve"
-	return map[string]interface{}{
-		"mcpServers": map[string]interface{}{
-			"apm": map[string]interface{}{
-				"command": "powershell",
-				"args":    []string{"-ExecutionPolicy", "Bypass", "-Command", cmdStr},
-				"env":     map[string]string{},
-			},
-		},
-	}
-}
-
 var mcpConfigCmd = &cobra.Command{
 	Use:   "config",
-	Short: "Show first-run MCP setup config",
+	Short: "Show the MCP server entry for your assistant's config",
 	Run: func(cmd *cobra.Command, args []string) {
-		fullConfig := buildMCPSetupConfig()
-		configJSON, _ := json.MarshalIndent(fullConfig, "", "  ")
-		color.HiYellow("Copy this to your MCP settings (no bootstrap script file):")
+		configJSON, _ := json.MarshalIndent(buildMCPConfigForToken(""), "", "  ")
+		color.HiYellow("Copy this to your MCP settings:")
 		fmt.Println(string(configJSON))
-		color.Cyan("After token setup completes, the config is auto-updated to tokenized `pm mcp serve --token ...` format.")
+		color.Cyan("Run `pm mcp token` to create a token for this assistant, then add `--token <token>` to args.")
 	},
 }
 

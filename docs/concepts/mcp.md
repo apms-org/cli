@@ -56,34 +56,28 @@ Scopes are **cumulative** — `admin` includes everything from `write`, which in
 
 ## Transaction Guardrails
 
-All write operations use a **two-phase commit** to prevent unintended changes:
+Every write operation waits for **your** approval. The AI cannot approve its own changes.
 
-### Phase 1: Preview
+### Phase 1: Request
 
 When the AI calls a write tool (e.g., `add_entry`), APM:
 
-1. Creates a **preview** of the change
-2. Generates a unique `tx_id`
-3. Returns the preview to the AI for review
+1. Queues the change as a **pending request** with a unique `tx_id`
+2. Returns the `tx_id` to the AI. Nothing is written yet.
 
-### Phase 2: Commit
+### Phase 2: Your decision
 
-The AI must send a second call with:
-
-- The same `tx_id`
-- An explicit `approve: true` flag
-
-Only then does APM execute the mutation and return a **receipt ID**.
+You approve or reject the request in the desktop app (**Settings → AI access**). Only an approval executes the change, and it records a **receipt ID**. A request expires after 15 minutes. The AI can check on its requests with `tx_list` or withdraw one with `tx_abort`.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Pending: AI calls write tool
-    Pending --> Preview: Server creates preview
-    Preview --> Approved: AI sends approve
-    Preview --> Expired: Timeout (no response)
-    Approved --> Committed: Server executes mutation
-    Committed --> [*]: Receipt returned
-    Expired --> [*]: Transaction cancelled
+    Pending --> Committed: You approve in the app
+    Pending --> Rejected: You reject in the app
+    Pending --> Expired: 15 minutes pass
+    Committed --> [*]: Receipt recorded
+    Rejected --> [*]
+    Expired --> [*]
 ```
 
 ### Why Guardrails?
@@ -92,7 +86,7 @@ AI agents can make mistakes. Transaction guardrails ensure:
 
 - **No accidental mutations** — Every change requires explicit approval
 - **Audit trail** — Each transaction generates a receipt ID
-- **Reversibility** — The preview phase lets the AI (or user) catch errors
+- **Human in the loop** — You see each change before it happens and can reject it
 
 ---
 

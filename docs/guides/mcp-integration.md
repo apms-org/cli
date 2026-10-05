@@ -47,13 +47,13 @@ Ephemeral sessions can also be bound to an agent name through `APM_EPHEMERAL_AGE
 
 ## Mutation guardrails
 
-Write tools are not single-shot commits. The code uses a preview transaction flow:
+Write tools never commit on their own:
 
-1. First call creates a pending transaction and returns a `tx_id`.
-2. Second call repeats the tool with `tx_id` and `approve: true`.
-3. Successful commits return a receipt string.
+1. The call creates a pending transaction and returns a `tx_id`.
+2. You approve or reject it in the desktop app (**Settings → AI access**). The assistant cannot approve it.
+3. An approved transaction is applied and gets a receipt string.
 
-This applies to mutation tools such as entry add, edit, and delete operations.
+This applies to the entry add, edit, and delete tools.
 
 ## Tool categories
 

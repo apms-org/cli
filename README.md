@@ -107,7 +107,7 @@ APM supports **25 structured secret types** with validated fields and type-speci
 **MCP Server**
 - Native Model Context Protocol server
 - Scoped permission tokens: `read`, `secrets`, `write`, `admin`
-- Transaction guardrails for write ops: preview → approve → receipt
+- Write ops wait for your approval in the desktop app; assistants cannot approve their own changes
 - Works with Claude Desktop, Cursor, Windsurf, and any MCP client
 
 
