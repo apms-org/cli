@@ -54,7 +54,7 @@ func AttemptUnlockWithSession(vaultPath string) (*UnlockResult, error) {
 
 			vault, err := DecryptVault(data, session.MasterPassword, 1)
 			if err == nil {
-				if vault.NeedsRepair {
+				if vault.NeedsRepair && !vault.IsNewerFormat() {
 					updatedData, _ := EncryptVault(vault, session.MasterPassword)
 					SaveVault(vaultPath, updatedData)
 				}
@@ -115,8 +115,11 @@ func UnlockWithPassword(vaultPath, password string) (*UnlockResult, error) {
 	vault.FailedAttempts = 0
 	vault.EmergencyMode = false
 
-	updatedData, _ := EncryptVault(vault, password)
-	SaveVault(vaultPath, updatedData)
+	// A vault from a newer engine opens read-only, so it is not rewritten here.
+	if !vault.IsNewerFormat() {
+		updatedData, _ := EncryptVault(vault, password)
+		SaveVault(vaultPath, updatedData)
+	}
 
 	CreateSession(password, 1*time.Hour, false, 15*time.Minute)
 

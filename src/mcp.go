@@ -783,6 +783,9 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("Vault Error: %v", err)}}}, nil
 		}
+		if r := mcpRefuseNewer(vault); r != nil {
+			return r, nil
+		}
 
 		opErr := ApplyMCPAddEntry(vault, args)
 
@@ -831,6 +834,9 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		vault, masterPwd, err := unlockVaultForMCP(vaultPath)
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error"}}}, nil
+		}
+		if r := mcpRefuseNewer(vault); r != nil {
+			return r, nil
 		}
 
 		if !ApplyMCPDeleteEntry(vault, args.Name) {
@@ -886,6 +892,9 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error"}}}, nil
 		}
+		if r := mcpRefuseNewer(vault); r != nil {
+			return r, nil
+		}
 
 		updated := ApplyMCPEditEntry(vault, args)
 
@@ -923,6 +932,9 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		vault, masterPwd, err := unlockVaultForMCP(vaultPath)
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error"}}}, nil
+		}
+		if r := mcpRefuseNewer(vault); r != nil {
+			return r, nil
 		}
 
 		if args.Action == "list" {
@@ -973,6 +985,9 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		vault, masterPwd, err := unlockVaultForMCP(vaultPath)
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error"}}}, nil
+		}
+		if r := mcpRefuseNewer(vault); r != nil {
+			return r, nil
 		}
 
 		switch args.Action {
@@ -1038,6 +1053,9 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		vault, masterPwd, err := unlockVaultForMCP(vaultPath)
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error"}}}, nil
+		}
+		if r := mcpRefuseNewer(vault); r != nil {
+			return r, nil
 		}
 
 		if args.Provider == "gdrive" {
@@ -1129,6 +1147,9 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		vault, masterPwd, err := unlockVaultForMCP(vaultPath)
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error"}}}, nil
+		}
+		if r := mcpRefuseNewer(vault); r != nil {
+			return r, nil
 		}
 		cm, err := GetCloudProvider(args.Provider, context.Background(), vault.CloudCredentials, vault.CloudToken, "apm_public")
 		if err != nil {
@@ -1245,6 +1266,14 @@ func StartMCPServer(token string, vaultPath string, transport mcp.Transport) err
 		transport = &mcp.StdioTransport{}
 	}
 	return s.Run(context.Background(), transport)
+}
+
+// mcpRefuseNewer stops an MCP write against a vault from a newer pm.
+func mcpRefuseNewer(v *Vault) *mcp.CallToolResult {
+	if !v.IsNewerFormat() {
+		return nil
+	}
+	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Vault Error: " + ErrVaultNewer.Error()}}}
 }
 
 func saveVault(vault *Vault, masterPwd string, path string) error {

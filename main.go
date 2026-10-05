@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"image"
@@ -56,6 +57,14 @@ func init() {
 	vaultFile := os.Getenv("APM_VAULT_PATH")
 	if vaultFile == "" {
 		vaultFile = "vault.dat"
+		// A vault next to pm wins only when one is there. The pm command the
+		// desktop app installs is a symlink in /usr/local/bin with nothing
+		// beside it, so it falls through to ~/.apm/vault.dat, the app's vault.
+		if _, statErr := os.Stat(filepath.Join(filepath.Dir(exe), vaultFile)); statErr != nil {
+			if home, homeErr := os.UserHomeDir(); homeErr == nil {
+				vaultFile = filepath.Join(home, ".apm", "vault.dat")
+			}
+		}
 	}
 	if filepath.IsAbs(vaultFile) {
 		vaultPath = filepath.Clean(vaultFile)
@@ -71,9 +80,12 @@ func main() {
 	}
 
 	var rootCmd = &cobra.Command{
-		Use:   "pm",
-		Short: "A simple password manager CLI",
+		Use:     "pm",
+		Short:   "A simple password manager CLI",
+		Version: Version,
 	}
+	// `pm --version` prints the bare version so scripts can parse it.
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
 
 	setupGDrive := func(v *src.Vault, mp string) error {
 		color.Yellow("\nSetting up Google Drive...")
@@ -866,10 +878,15 @@ func main() {
 			timeout, _ := cmd.Flags().GetDuration("timeout")
 			inactivity, _ := cmd.Flags().GetDuration("inactivity")
 
-			masterPassword, vault, readonly, err := src_unlockVault()
+			// The session keeps its own read-only flag: a newer vault is read-only
+			// only until pm is updated, so it must not persist into the session.
+			masterPassword, vault, readonly, err := unlockVaultCredentials()
 			if err != nil {
 				fmt.Println(err)
 				return
+			}
+			if vault.IsNewerFormat() {
+				warnVaultNewer()
 			}
 			policy := lockPolicyOf(vault)
 			if cmd.Flags().Changed("timeout") {
@@ -1478,7 +1495,7 @@ func main() {
 
 			exe, _ := os.Executable()
 			installDir := filepath.Dir(exe)
-			infoVersion := "v11.1.0 Stable Release"
+			infoVersion := "v" + Version + " Stable Release"
 			infoBuild := " (07/30/2026 (MM/DD/YYYY))"
 
 			vaultAccessible := true
@@ -1496,7 +1513,7 @@ func main() {
 				}
 			}
 
-			fmt.Println("APM Stable v11.1.0 Release")
+			fmt.Printf("APM Stable v%s Release\n", Version)
 			fmt.Println("────────────────────────────")
 			fmt.Println()
 			fmt.Printf("User:       %s@apm\n", processedHomeName)
@@ -1506,7 +1523,7 @@ func main() {
 			fmt.Printf("Version:    %s\n", infoVersion)
 			fmt.Printf("Build:      %s\n", infoBuild)
 			fmt.Println()
-			fmt.Println("Repo:       github.com/aaravmaloo/apm")
+			fmt.Println("Repo:       github.com/apms-org/apm")
 			fmt.Println("Support:    aaravmaloo06@gmail.com")
 			fmt.Println()
 			fmt.Println("Status:")
@@ -1571,6 +1588,7 @@ func main() {
 				fmt.Println(err)
 				return
 			}
+			exitIfVaultNewer(vault)
 
 			if vault.CloudFileID != "" || vault.GitHubToken != "" || vault.DropboxToken != nil {
 				color.Red("Cloud sync is already initialized.")
@@ -1635,8 +1653,14 @@ func main() {
 				return
 			}
 
-			data, _ := src.EncryptVault(vault, masterPassword)
-			src.SaveVault(vaultPath, data)
+			data, err := src.EncryptVault(vault, masterPassword)
+			if err == nil {
+				err = src.SaveVault(vaultPath, data)
+			}
+			if err != nil {
+				cliSaveError(err)
+				return
+			}
 			src.LogAction("CLOUD_INIT_SUCCESS", fmt.Sprintf("Provider: %s", provider))
 		},
 	}
@@ -2099,6 +2123,7 @@ func main() {
 				fmt.Println(err)
 				return
 			}
+			exitIfVaultNewer(vault)
 
 			if vault.CloudFileID == "" {
 				color.Red("Cloud file not found in vault metadata.")
@@ -2129,8 +2154,13 @@ func main() {
 			vault.RetrievalKey = ""
 			vault.CloudFileID = ""
 			vault.LastCloudProvider = ""
-			data, _ := src.EncryptVault(vault, masterPassword)
-			src.SaveVault(vaultPath, data)
+			data, err := src.EncryptVault(vault, masterPassword)
+			if err == nil {
+				err = src.SaveVault(vaultPath, data)
+			}
+			if err != nil {
+				cliSaveError(err)
+			}
 
 			color.Green("Vault deleted from cloud.")
 			src.LogAction("CLOUD_DELETE_SUCCESS", fmt.Sprintf("Provider: %s, FileID: %s", provider, vault.CloudFileID))
@@ -2470,6 +2500,7 @@ func main() {
 				fmt.Println(err)
 				return
 			}
+			exitIfVaultNewer(vault)
 
 			policyDir := filepath.Join(filepath.Dir(vaultPath), "policies")
 			policies, err := src.LoadPolicies(policyDir)
@@ -2540,6 +2571,7 @@ func main() {
 				fmt.Println(err)
 				return
 			}
+			exitIfVaultNewer(vault)
 
 			vault.ActivePolicy = src.Policy{}
 			data, err := src.EncryptVault(vault, masterPwd)
@@ -2856,6 +2888,7 @@ func main() {
 				fmt.Println(err)
 				return
 			}
+			exitIfVaultNewer(vault)
 
 			newSpace := args[0]
 			for _, p := range vault.Spaces {
@@ -2894,6 +2927,7 @@ func main() {
 				fmt.Println(err)
 				return
 			}
+			exitIfVaultNewer(vault)
 
 			target := args[0]
 			if target == "default" {
@@ -3145,12 +3179,17 @@ func main() {
 	rootCmd.Execute()
 }
 
-const Version = "9.2"
+// Version is the single source of truth for the engine version. It is a var so
+// release builds can override it with -ldflags "-X main.Version=...".
+var Version = "12.0.0"
+
+// releasesURL is where the update checker looks for the latest release.
+const releasesURL = "https://api.github.com/repos/apms-org/apm/releases/latest"
 
 func checkForUpdates(force bool) {
 	fmt.Printf("Checking for updates... (Current version: %s)\n", Version)
 
-	resp, err := http.Get("https://api.github.com/repos/aaravmaloo/apm/releases/latest")
+	resp, err := http.Get(releasesURL)
 	if err != nil {
 		color.Red("Failed to check for updates: %v", err)
 		return
@@ -3627,10 +3666,47 @@ func syncTouchIDCredential(newPass string) {
 	color.Green("Touch ID credential updated with the new master password.")
 }
 
-// src_unlockVault is the shared unlock entry point for CLI commands. It tries
-// reusable credentials first and only falls back to the interactive path when
-// no valid ephemeral or session-based unlock is available.
+// vaultNewerMessage is shown when the vault was written by a newer engine.
+const vaultNewerMessage = "This vault was updated by a newer version of pm. Update pm to edit it."
+
+// src_unlockVault is the shared unlock entry point for CLI commands. A vault
+// written by a newer pm opens read-only: reads keep working, while writes are
+// refused here (readonly) and again by src.EncryptVault (ErrVaultNewer).
 func src_unlockVault() (string, *src.Vault, bool, error) {
+	pass, vault, readonly, err := unlockVaultCredentials()
+	if err == nil && vault.IsNewerFormat() {
+		warnVaultNewer()
+		readonly = true
+	}
+	return pass, vault, readonly, err
+}
+
+func warnVaultNewer() {
+	fmt.Fprintln(os.Stderr, color.YellowString(vaultNewerMessage))
+}
+
+// exitIfVaultNewer stops a write command up front when the vault belongs to a
+// newer pm, before any side effect. src_unlockVault has already said why.
+func exitIfVaultNewer(v *src.Vault) {
+	if v.IsNewerFormat() {
+		os.Exit(1)
+	}
+}
+
+// cliSaveError prints a failed vault save, using the plain-language message
+// when the vault belongs to a newer pm.
+func cliSaveError(err error) {
+	if errors.Is(err, src.ErrVaultNewer) {
+		color.Red(vaultNewerMessage)
+		return
+	}
+	color.Red("Error saving vault: %v", err)
+}
+
+// unlockVaultCredentials tries reusable credentials first and only falls back
+// to the interactive path when no valid ephemeral or session-based unlock is
+// available.
+func unlockVaultCredentials() (string, *src.Vault, bool, error) {
 	if !src.VaultExists(vaultPath) {
 		return "", nil, false, fmt.Errorf("Vault not found. Run 'pm setup'.")
 	}
@@ -3664,7 +3740,7 @@ func src_unlockVault() (string, *src.Vault, bool, error) {
 
 			vault, err := src.DecryptVault(data, session.MasterPassword, 1)
 			if err == nil {
-				if vault.NeedsRepair {
+				if vault.NeedsRepair && !vault.IsNewerFormat() {
 					updatedData, _ := src.EncryptVault(vault, session.MasterPassword)
 					src.SaveVault(vaultPath, updatedData)
 				}
@@ -3770,8 +3846,11 @@ func src_unlockVault() (string, *src.Vault, bool, error) {
 				src.SendAlert(vault, src.LevelCritical, "ANOMALY", fmt.Sprintf("Unusual activity detected during unlock: %v", alerts))
 			}
 
-			updatedData, _ := src.EncryptVault(vault, pass)
-			src.SaveVault(vaultPath, updatedData)
+			// A vault from a newer pm opens read-only and is not rewritten.
+			if !vault.IsNewerFormat() {
+				updatedData, _ := src.EncryptVault(vault, pass)
+				src.SaveVault(vaultPath, updatedData)
+			}
 
 			policy := lockPolicyOf(vault)
 			_ = policy.startSession(pass, false)
@@ -4100,9 +4179,15 @@ func handleInteractiveEntries(v *src.Vault, masterPassword, initialQuery string,
 								delete(selectedItems, key)
 							}
 						}
-						data, _ := src.EncryptVault(v, masterPassword)
-						src.SaveVault(vaultPath, data)
-						color.Green("Bulk deletion complete.")
+						data, err := src.EncryptVault(v, masterPassword)
+						if err == nil {
+							err = src.SaveVault(vaultPath, data)
+						}
+						if err != nil {
+							cliSaveError(err)
+						} else {
+							color.Green("Bulk deletion complete.")
+						}
 						fmt.Print("\nPress Enter to continue...")
 						readInput()
 					}
@@ -4484,9 +4569,12 @@ func handleAction(v *src.Vault, mp string, res src.SearchResult, action byte, re
 			fmt.Printf("Are you sure you want to delete '%s' (%s)? (y/n): ", res.Identifier, res.Type)
 			if strings.ToLower(readInput()) == "y" {
 				if deleteEntryByResult(v, res) {
-					data, _ := src.EncryptVault(v, mp)
-					if err := src.SaveVault(vaultPath, data); err != nil {
-						color.Red("Error saving vault: %v", err)
+					data, err := src.EncryptVault(v, mp)
+					if err == nil {
+						err = src.SaveVault(vaultPath, data)
+					}
+					if err != nil {
+						cliSaveError(err)
 					} else {
 						src.SendAlert(v, src.LevelAll, "ENTRY DELETED", fmt.Sprintf("Deleted entry: %s (%s)", res.Identifier, res.Type))
 						color.Green("Deleted.")
@@ -5107,9 +5195,12 @@ func editEntryInVault(v *src.Vault, mp string, res src.SearchResult) {
 		color.Yellow("Editing for %s not implemented.", res.Type)
 	}
 	if updated {
-		data, _ := src.EncryptVault(v, mp)
-		if err := src.SaveVault(vaultPath, data); err != nil {
-			color.Red("Error saving vault: %v", err)
+		data, err := src.EncryptVault(v, mp)
+		if err == nil {
+			err = src.SaveVault(vaultPath, data)
+		}
+		if err != nil {
+			cliSaveError(err)
 		} else {
 			src.SendAlert(v, src.LevelAll, "ENTRY MODIFIED", fmt.Sprintf("Modified entry: %s (%s)", res.Identifier, res.Type))
 			color.Green("Updated.")
@@ -5549,7 +5640,11 @@ func handleDownloadedVault(data []byte, provider, githubToken, githubRepo string
 		vault.GitHubToken = githubToken
 		vault.GitHubRepo = githubRepo
 
-		data, _ = src.EncryptVault(vault, pass)
+		if enc, err := src.EncryptVault(vault, pass); err == nil {
+			data = enc
+		} else {
+			color.Yellow("GitHub settings not stored in the downloaded vault: %v", err)
+		}
 	}
 
 	if localData, readErr := os.ReadFile(vaultPath); readErr == nil {
@@ -6253,6 +6348,7 @@ var authEmailCmd = &cobra.Command{
 			color.Red("Error: %v\n", err)
 			return
 		}
+		exitIfVaultNewer(vault)
 
 		host, port, user, passEmail := apmSMTPConfig()
 
@@ -6361,9 +6457,12 @@ var authEmailCmd = &cobra.Command{
 		color.White("\nIMPORTANT: Store this key in a physically secure location.")
 		color.White("It will NEVER be shown again and is NOT stored in plain text.")
 
-		data, _ := src.EncryptVault(vault, pass)
-		if err := src.SaveVault(vaultPath, data); err != nil {
-			color.Red("Error saving vault: %v", err)
+		data, err := src.EncryptVault(vault, pass)
+		if err == nil {
+			err = src.SaveVault(vaultPath, data)
+		}
+		if err != nil {
+			cliSaveError(err)
 		}
 	},
 }
@@ -6381,6 +6480,7 @@ var authAlertsCmd = &cobra.Command{
 			color.Red("Error: %v\n", err)
 			return
 		}
+		exitIfVaultNewer(vault)
 
 		if enable {
 			vault.AlertsEnabled = true
@@ -6422,6 +6522,7 @@ var authLevelCmd = &cobra.Command{
 			color.Red("Error: %v\n", err)
 			return
 		}
+		exitIfVaultNewer(vault)
 
 		if len(args) == 0 {
 			color.Cyan("Current security level: %d", vault.SecurityLevel)
@@ -6458,11 +6559,15 @@ var authResetCmd = &cobra.Command{
 			color.Red("Error: %v\n", err)
 			return
 		}
+		exitIfVaultNewer(vault)
 
 		vault.ClearRecoveryInfo()
-		data, _ := src.EncryptVault(vault, pass)
-		if err := src.SaveVault(vaultPath, data); err != nil {
-			color.Red("Error saving vault: %v\n", err)
+		data, err := src.EncryptVault(vault, pass)
+		if err == nil {
+			err = src.SaveVault(vaultPath, data)
+		}
+		if err != nil {
+			cliSaveError(err)
 		} else {
 			src.SendAlert(vault, src.LevelSettings, "RECOVERY RESET", "Recovery email and associated metadata have been cleared.")
 			color.Green("Recovery email and records removed successfully.\n")
@@ -6479,6 +6584,7 @@ var authChangeCmd = &cobra.Command{
 			color.Red("Error: %v\n", err)
 			return
 		}
+		exitIfVaultNewer(vault)
 
 		color.Yellow("Enter new master password: ")
 		newPass, _ := readPassword()

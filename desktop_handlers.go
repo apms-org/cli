@@ -173,6 +173,9 @@ func hVaultStatus(s *desktopServer, p json.RawMessage) (any, error) {
 	if wait := time.Until(s.cooldownUntil); wait > 0 {
 		res["cooldown"] = int((wait + time.Second - 1) / time.Second)
 	}
+	// The revision lives inside the encrypted payload, so it is only known
+	// once the vault is unlocked; while locked newerFormat stays false.
+	s.formatView(res)
 	if !exists {
 		return res, nil
 	}
@@ -208,7 +211,8 @@ func (s *desktopServer) finishUnlock(password string, v *src.Vault, via string, 
 	s.vault = v
 	s.password = password
 	s.rec = nil
-	if v.NeedsRepair {
+	// A vault from a newer pm opens read-only and is never repaired here.
+	if v.NeedsRepair && !v.IsNewerFormat() {
 		_ = s.save("Repaired vault format")
 	}
 	if data, err := os.ReadFile(s.vaultPath); err == nil {

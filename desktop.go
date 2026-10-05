@@ -295,6 +295,8 @@ func (s *desktopServer) respond(id json.RawMessage, result any, err error) {
 
 func mapGoError(err error) *rpcError {
 	switch {
+	case errors.Is(err, src.ErrVaultNewer):
+		return errVaultNewer()
 	case errors.Is(err, src.ErrItemExists):
 		return rpcErr("exists", err.Error())
 	case errors.Is(err, src.ErrItemNotFound):
@@ -352,7 +354,32 @@ func (s *desktopServer) unlocked() bool {
 	return s.vault != nil && s.password != ""
 }
 
+// vaultNewer reports whether the unlocked vault was written by a newer engine.
+// Such a vault stays read-only until APM is updated.
+func (s *desktopServer) vaultNewer() bool {
+	return s.vault != nil && s.vault.IsNewerFormat()
+}
+
+// errVaultNewer is what every mutating RPC returns for a vault from a newer pm.
+func errVaultNewer() *rpcError {
+	return rpcErr("vault_newer", "This vault was updated by a newer pm. Update APM to edit it.")
+}
+
+// formatView reports the vault's format revision against this engine's.
+func (s *desktopServer) formatView(res map[string]any) {
+	rev := 0
+	if s.vault != nil {
+		rev = s.vault.FormatRevision
+	}
+	res["newerFormat"] = s.vaultNewer()
+	res["formatRevision"] = rev
+	res["engineRevision"] = src.VaultFormatRevision
+}
+
 func (s *desktopServer) isReadonly() bool {
+	if s.vaultNewer() {
+		return true
+	}
 	if s.readonlyUntil.IsZero() {
 		return false
 	}
@@ -373,6 +400,9 @@ func (s *desktopServer) requireUnlocked() error {
 func (s *desktopServer) requireWritable() error {
 	if err := s.requireUnlocked(); err != nil {
 		return err
+	}
+	if s.vaultNewer() {
+		return errVaultNewer()
 	}
 	if s.isReadonly() {
 		return rpcErr("readonly", "This session is read-only.")
@@ -401,6 +431,9 @@ func (s *desktopServer) dropKey() {
 }
 
 func (s *desktopServer) writeVault(data []byte, recordCommit bool, note string) error {
+	if len(data) == 0 {
+		return errors.New("refusing to write an empty vault")
+	}
 	hash := sha256Hex(data)
 	s.lastWriteHash = hash
 	if recordCommit {
@@ -1467,7 +1500,7 @@ func (s *desktopServer) snapshot() map[string]any {
 	}
 	logs, _ := src.GetAuditLogs(0)
 	commits, head := s.commitsView()
-	return map[string]any{
+	snap := map[string]any{
 		"v": 4,
 		"meta": map[string]any{
 			"name":          s.vaultName(),
@@ -1504,6 +1537,8 @@ func (s *desktopServer) snapshot() map[string]any {
 		"totpOrder":  s.totpOrderView(refs),
 		"readonly":   s.isReadonly(),
 	}
+	s.formatView(snap)
+	return snap
 }
 
 func (s *desktopServer) scheduleAutoSync() {

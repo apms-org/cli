@@ -48,6 +48,7 @@ var bridgeHTTPStatus = map[string]int{
 	"exists":              409,
 	"locked":              423,
 	"readonly":            423,
+	"vault_newer":         423,
 	"wrong_password":      401,
 	"cooldown":            429,
 	"breach_lock":         423,

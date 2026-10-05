@@ -24,6 +24,16 @@ const VaultHeader = "APMVAULT"
 
 const CurrentVersion = 4
 
+// VaultFormatRevision is the revision of the vault data this engine knows how
+// to write. It is stored inside the encrypted payload. Bump it whenever the
+// vault gains data an older engine would drop on save. Absent/0 means a vault
+// from before revisions existed, which is always safe to open and write.
+const VaultFormatRevision = 1
+
+// ErrVaultNewer is returned when saving a vault last written by a newer engine.
+// That vault may hold data this engine does not know, and saving would drop it.
+var ErrVaultNewer = errors.New("this vault was updated by a newer pm. Update pm to edit it.")
+
 func GetVaultParams(data []byte) (CryptoProfile, int, error) {
 	if len(data) < len(VaultHeader) || string(data[:len(VaultHeader)]) != VaultHeader {
 		return CryptoProfile{}, 0, errors.New("invalid vault header")
@@ -409,6 +419,13 @@ type Vault struct {
 	RecoveryPasskeyUserID  []byte                     `json:"recovery_passkey_user_id,omitempty"`
 	RecoveryPasskeyCred    []byte                     `json:"recovery_passkey_cred,omitempty"`
 	Desktop                *DesktopState              `json:"desktop,omitempty"`
+	FormatRevision         int                        `json:"format_revision,omitempty"`
+}
+
+// IsNewerFormat reports whether the vault was last written by a newer engine.
+// Such a vault opens read-only here: every save is refused with ErrVaultNewer.
+func (v *Vault) IsNewerFormat() bool {
+	return v != nil && v.FormatRevision > VaultFormatRevision
 }
 
 func (v *Vault) Serialize(masterPassword string) ([]byte, error) {
@@ -419,7 +436,19 @@ func (v *Vault) Serialize(masterPassword string) ([]byte, error) {
 // master password protects the DEK slot and integrity metadata, while the DEK
 // itself encrypts the JSON body so future password changes do not require
 // re-encrypting individual vault items.
+//
+// Every vault write goes through here, so this is where a vault from a newer
+// engine is refused and where the format revision is stamped.
 func EncryptVault(vault *Vault, masterPassword string) ([]byte, error) {
+	if vault.IsNewerFormat() {
+		return nil, ErrVaultNewer
+	}
+	vault.FormatRevision = VaultFormatRevision
+	return encryptVaultPayload(vault, masterPassword)
+}
+
+// encryptVaultPayload seals the vault as-is, without the format guard.
+func encryptVaultPayload(vault *Vault, masterPassword string) ([]byte, error) {
 	var profile CryptoProfile
 	if vault.CurrentProfileParams != nil {
 		profile = *vault.CurrentProfileParams
@@ -569,7 +598,9 @@ func DecryptVault(data []byte, masterPassword string, costMultiplier int) (*Vaul
 		}
 		v, err = decryptOldVault(data[16:], masterPassword, data[:16])
 	}
-	if err == nil && v.MergeLinkedTOTP() > 0 {
+	// A vault from a newer engine is left exactly as written: it cannot be saved
+	// here, so it must not be repaired either.
+	if err == nil && !v.IsNewerFormat() && v.MergeLinkedTOTP() > 0 {
 		v.NeedsRepair = true
 	}
 	return v, err
